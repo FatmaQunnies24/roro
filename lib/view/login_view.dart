@@ -8,24 +8,81 @@ class LoginView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Choose User Type")),
+      appBar: AppBar(
+        title: const Text("تطبيق كرة القدم"),
+        backgroundColor: Colors.green[700],
+      ),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            ElevatedButton(
-                onPressed: () {
-                  Navigator.push(context,
-                      MaterialPageRoute(builder: (_) => const CoachHomeView(teamId: "team01")));
-                },
-                child: const Text("Coach")),
-            const SizedBox(height: 20),
-            ElevatedButton(
+            const Icon(
+              Icons.sports_soccer,
+              size: 100,
+              color: Colors.green,
+            ),
+            const SizedBox(height: 40),
+            const Text(
+              "اختر نوع المستخدم",
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 40),
+            SizedBox(
+              width: 250,
+              child: ElevatedButton.icon(
                 onPressed: () {
                   Navigator.push(
-                      context, MaterialPageRoute(builder: (_) => const PlayerHomeView(playerId: "player01")));
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const CoachHomeView(teamId: "team01"),
+                    ),
+                  );
                 },
-                child: const Text("Player")),
+                icon: const Icon(Icons.person, size: 28),
+                label: const Text(
+                  "مدرب",
+                  style: TextStyle(fontSize: 18),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue[700],
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 20),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: 250,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const PlayerHomeView(playerId: "player01"),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.sports, size: 28),
+                label: const Text(
+                  "لاعب",
+                  style: TextStyle(fontSize: 18),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green[700],
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 20),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),

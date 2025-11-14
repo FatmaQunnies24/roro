@@ -1,3 +1,5 @@
+import '../utils/player_metrics_calculator.dart';
+
 class PlayerModel {
   final String id;
   final String name;
@@ -25,9 +27,29 @@ class PlayerModel {
     required this.bodyStrength,
     required this.balance,
     required this.effortIndex,
-    required this.overallScore,
-    required this.statusText,
-  });
+    double? overallScore,
+    String? statusText,
+  })  : overallScore = overallScore ??
+            PlayerMetricsCalculator.calculateOverallScore(
+              speed: speed,
+              shotPower: shotPower,
+              stamina: stamina,
+              bodyStrength: bodyStrength,
+              balance: balance,
+              effortIndex: effortIndex,
+            ),
+        statusText = statusText ??
+            PlayerMetricsCalculator.getPerformanceDescription(
+              overallScore ??
+                  PlayerMetricsCalculator.calculateOverallScore(
+                    speed: speed,
+                    shotPower: shotPower,
+                    stamina: stamina,
+                    bodyStrength: bodyStrength,
+                    balance: balance,
+                    effortIndex: effortIndex,
+                  ),
+            );
 
   factory PlayerModel.fromMap(String id, Map<String, dynamic> data) {
     return PlayerModel(
