@@ -3,6 +3,8 @@ import '../service/player_service.dart';
 import '../service/exercise_service.dart';
 import '../model/player_model.dart';
 import 'player_exercises_view.dart';
+import 'player_metrics_details_view.dart';
+import 'player_training_view.dart';
 
 class PlayerDetailsView extends StatelessWidget {
   final String playerId;
@@ -167,7 +169,52 @@ class PlayerDetailsView extends StatelessWidget {
                             _getScoreColor(player.overallScore),
                           ),
                         ),
+                        const SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => PlayerMetricsDetailsView(player: player),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.info_outline),
+                            label: const Text("تفاصيل"),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.white,
+                              foregroundColor: Colors.black87,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
+                        ),
                       ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // زر ابدأ التدريب
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => PlayerTrainingView(playerId: playerId),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.play_circle_outline),
+                    label: const Text("ابدأ التدريب"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange[700],
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      textStyle: const TextStyle(fontSize: 18),
                     ),
                   ),
                 ),

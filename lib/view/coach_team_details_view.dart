@@ -7,6 +7,7 @@ import '../model/user_model.dart';
 import '../model/player_model.dart';
 import 'player_details_view.dart';
 import 'coach_assign_player_position_view.dart';
+import 'select_users_for_team_view.dart';
 
 class CoachTeamDetailsView extends StatelessWidget {
   final String teamId;
@@ -157,12 +158,28 @@ class CoachTeamDetailsView extends StatelessWidget {
                 const SizedBox(height: 24),
 
                 // قائمة اللاعبين (المستخدمين)
-                const Text(
-                  "اللاعبين",
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      "اللاعبين",
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        _showSelectPlayerDialog(context);
+                      },
+                      icon: const Icon(Icons.person_add),
+                      label: const Text("اختر لاعب"),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green[700],
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 16),
                 StreamBuilder<List<UserModel>>(
@@ -344,6 +361,23 @@ class CoachTeamDetailsView extends StatelessWidget {
       default:
         return role;
     }
+  }
+
+  void _showSelectPlayerDialog(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SelectUsersForTeamView(
+          teamId: teamId,
+          role: 'player',
+        ),
+      ),
+    ).then((updated) {
+      // تحديث الصفحة عند العودة
+      if (updated == true) {
+        // سيتم التحديث تلقائياً بواسطة StreamBuilder
+      }
+    });
   }
 }
 

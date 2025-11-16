@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../service/user_service.dart';
 import '../model/user_model.dart';
 import 'coach_main_content_view.dart';
-import 'add_player_view.dart';
 import 'login_view.dart';
 
 class CoachHomeView extends StatefulWidget {
@@ -24,18 +23,6 @@ class _CoachHomeViewState extends State<CoachHomeView> {
         title: const Text("لوحة المدرب"),
         backgroundColor: Colors.blue[700],
         actions: [
-          IconButton(
-            icon: const Icon(Icons.person_add),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => AddPlayerView(teamId: widget.teamId),
-                ),
-              );
-            },
-            tooltip: "إضافة لاعب جديد",
-          ),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: () {
