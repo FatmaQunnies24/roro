@@ -11,6 +11,11 @@ class PlayerService {
     await _playersRef.add(player.toMap());
   }
 
+  /// إضافة لاعب جديد بمعرف محدد
+  Future<void> addPlayerWithId(PlayerModel player) async {
+    await _playersRef.doc(player.id).set(player.toMap());
+  }
+
   /// إرجاع اللاعبين حسب الفريق (لصفحة المدرب)
   Stream<List<PlayerModel>> getPlayersByTeam(String teamId) {
     return _playersRef
@@ -30,11 +35,14 @@ class PlayerService {
 
   /// جلب لاعب واحد حسب الـ id (لصفحة تفاصيل اللاعب)
   Stream<PlayerModel> getPlayerById(String playerId) {
-    return _playersRef.doc(playerId).snapshots().where((doc) => doc.exists).map(
-          (doc) => PlayerModel.fromMap(
-            doc.id,
-            doc.data()!,
-          ),
-        );
+    return _playersRef.doc(playerId).snapshots().map((doc) {
+      if (!doc.exists) {
+        throw Exception('اللاعب غير موجود');
+      }
+      return PlayerModel.fromMap(
+        doc.id,
+        doc.data()!,
+      );
+    });
   }
 }

@@ -88,34 +88,70 @@ class _AddPlayerViewState extends State<AddPlayerView> {
     });
   }
 
+  // إنشاء معرف تلقائي للاعب
+  String _generatePlayerId(String name) {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final namePart = name.replaceAll(' ', '').toLowerCase();
+    final shortName = namePart.length > 6 ? namePart.substring(0, 6) : namePart;
+    return 'player_${shortName}_$timestamp';
+  }
+
   Future<void> _addPlayer() async {
     if (_formKey.currentState!.validate()) {
-      final player = PlayerModel(
-        id: '', // سيتم إنشاؤه تلقائياً من Firebase
-        name: _nameController.text,
-        teamId: widget.teamId,
-        positionType: _selectedPosition,
-        roleInTeam: _selectedRole,
-        speed: _speed,
-        shotPower: _shotPower,
-        stamina: _stamina,
-        bodyStrength: _bodyStrength,
-        balance: _balance,
-        effortIndex: _effortIndex,
-      );
-
       try {
-        await PlayerService().addPlayer(player);
+        final playerService = PlayerService();
+        
+        // إنشاء معرف تلقائي
+        String playerId = _generatePlayerId(_nameController.text.trim());
+        
+        // التأكد من أن المعرف غير مستخدم
+        int attempts = 0;
+        while (attempts < 10) {
+          try {
+            await playerService.getPlayerById(playerId).first.timeout(
+              const Duration(milliseconds: 100),
+            );
+            // إذا وصل هنا، المعرف مستخدم، أنشئ واحد جديد
+            playerId = _generatePlayerId(_nameController.text.trim());
+            attempts++;
+          } catch (e) {
+            // المعرف غير مستخدم، يمكن استخدامه
+            break;
+          }
+        }
+
+        final player = PlayerModel(
+          id: playerId,
+          name: _nameController.text.trim(),
+          teamId: widget.teamId,
+          positionType: _selectedPosition,
+          roleInTeam: _selectedRole,
+          speed: _speed,
+          shotPower: _shotPower,
+          stamina: _stamina,
+          bodyStrength: _bodyStrength,
+          balance: _balance,
+          effortIndex: _effortIndex,
+        );
+
+        await playerService.addPlayerWithId(player);
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("تم إضافة اللاعب بنجاح")),
+            const SnackBar(
+              content: Text("تم إضافة اللاعب بنجاح"),
+              backgroundColor: Colors.green,
+            ),
           );
           Navigator.pop(context);
         }
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("حدث خطأ: $e")),
+            SnackBar(
+              content: Text("حدث خطأ: $e"),
+              backgroundColor: Colors.red,
+            ),
           );
         }
       }
