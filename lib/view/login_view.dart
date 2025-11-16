@@ -4,7 +4,6 @@ import '../model/user_model.dart';
 import 'coach_home_view.dart';
 import 'player_home_view.dart';
 import 'admin_home_view.dart';
-import 'signup_view.dart';
 
 class LoginView extends StatefulWidget {
   const LoginView({super.key});
@@ -201,21 +200,6 @@ class _LoginViewState extends State<LoginView> {
                             "تسجيل الدخول",
                             style: TextStyle(fontSize: 18),
                           ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const SignUpView(),
-                      ),
-                    );
-                  },
-                  child: const Text(
-                    "ليس لديك حساب؟ إنشاء حساب جديد",
-                    style: TextStyle(fontSize: 16),
                   ),
                 ),
                 const SizedBox(height: 8),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../service/user_service.dart';
 import '../model/user_model.dart';
 import 'admin_user_details_view.dart';
+import 'login_view.dart';
 
 class AdminUsersTabsView extends StatelessWidget {
   const AdminUsersTabsView({super.key});
@@ -128,6 +129,54 @@ class AdminHomeTab extends StatelessWidget {
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 32),
+              
+              // زر تسجيل الخروج
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text("تسجيل الخروج"),
+                        content: const Text("هل أنت متأكد من تسجيل الخروج؟"),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text("إلغاء"),
+                          ),
+                          ElevatedButton(
+                            onPressed: () {
+                              Navigator.pop(context);
+                              Navigator.pushAndRemoveUntil(
+                                context,
+                                MaterialPageRoute(builder: (_) => const LoginView()),
+                                (route) => false,
+                              );
+                            },
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                            child: const Text("تسجيل الخروج"),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.logout),
+                  label: const Text(
+                    "تسجيل الخروج",
+                    style: TextStyle(fontSize: 18),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red[700],
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
               ),
             ],
           ),
