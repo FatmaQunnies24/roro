@@ -2,8 +2,11 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import '../service/player_service.dart';
+import '../service/metrics_history_service.dart';
 import '../model/player_model.dart';
+import '../model/metrics_history_model.dart';
 import '../utils/player_metrics_calculator.dart';
+import 'player_metrics_list_view.dart';
 
 class PlayerTrainingView extends StatefulWidget {
   final String playerId;
@@ -21,6 +24,10 @@ class _PlayerTrainingViewState extends State<PlayerTrainingView> {
   PlayerModel? _player;
   DateTime? _startTime;
 
+  // حقول إدخال قوة الضربة
+  final _ballMassController = TextEditingController(text: '0.43');
+  final _ballVelocityController = TextEditingController(text: '20');
+
   @override
   void initState() {
     super.initState();
@@ -30,6 +37,8 @@ class _PlayerTrainingViewState extends State<PlayerTrainingView> {
   @override
   void dispose() {
     _timer?.cancel();
+    _ballMassController.dispose();
+    _ballVelocityController.dispose();
     super.dispose();
   }
 
@@ -83,10 +92,16 @@ class _PlayerTrainingViewState extends State<PlayerTrainingView> {
     try {
       final random = Random();
       
-      // إنشاء مواصفات جديدة بشكل عشوائي مناسب
-      // النطاقات المناسبة لكل مواصفة:
+      // حساب قوة الضربة من المدخلات
+      final ballMass = double.tryParse(_ballMassController.text) ?? 0.43;
+      final ballVelocity = double.tryParse(_ballVelocityController.text) ?? 20.0;
+      final calculatedShotPower = PlayerMetricsCalculator.calculateShotPower(
+        ballMass: ballMass,
+        ballVelocity: ballVelocity,
+      );
+      
+      // باقي الأرقام عشوائية
       final newSpeed = 10.0 + (random.nextDouble() * 20.0); // 10-30 كم/ساعة
-      final newShotPower = 1000.0 + (random.nextDouble() * 4000.0); // 1000-5000 نيوتن
       final newStamina = 20.0 + (random.nextDouble() * 80.0); // 20-100%
       final newBodyStrength = 50.0 + (random.nextDouble() * 150.0); // 50-200 كجم
       final newBalance = 20.0 + (random.nextDouble() * 80.0); // 20-100%
@@ -100,7 +115,7 @@ class _PlayerTrainingViewState extends State<PlayerTrainingView> {
         positionType: _player!.positionType,
         roleInTeam: _player!.roleInTeam,
         speed: newSpeed,
-        shotPower: newShotPower,
+        shotPower: calculatedShotPower, // قوة الضربة المحسوبة
         stamina: newStamina,
         bodyStrength: newBodyStrength,
         balance: newBalance,
@@ -109,22 +124,29 @@ class _PlayerTrainingViewState extends State<PlayerTrainingView> {
 
       await PlayerService().addPlayerWithId(updatedPlayer);
 
+      // حفظ في التاريخ
+      final historyService = MetricsHistoryService();
+      final history = MetricsHistoryModel(
+        id: '', // سيتم إنشاؤه تلقائياً
+        playerId: _player!.id,
+        timestamp: DateTime.now(),
+        speed: newSpeed,
+        shotPower: calculatedShotPower,
+        stamina: newStamina,
+        bodyStrength: newBodyStrength,
+        balance: newBalance,
+        effortIndex: newEffortIndex,
+        overallScore: updatedPlayer.overallScore,
+        trainingDurationSeconds: duration.inSeconds,
+      );
+      await historyService.addMetricsHistory(history);
+
       if (mounted) {
         final minutes = duration.inMinutes;
         final seconds = duration.inSeconds % 60;
         
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              "تم حفظ نتائج التدريب!\nمدة التدريب: ${minutes}د ${seconds}ث",
-            ),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 3),
-          ),
-        );
-        
-        // تحديث بيانات اللاعب
-        await _loadPlayer();
+        // عرض نتائج الأداء
+        _showPerformanceResults(updatedPlayer, duration);
       }
     } catch (e) {
       if (mounted) {
@@ -138,6 +160,99 @@ class _PlayerTrainingViewState extends State<PlayerTrainingView> {
     }
   }
 
+  void _showPerformanceResults(PlayerModel player, Duration duration) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text("نتائج التدريب"),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "مدة التدريب: ${duration.inMinutes}د ${duration.inSeconds % 60}ث",
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                "المواصفات الجديدة:",
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              const SizedBox(height: 8),
+              _buildResultRow("السرعة", "${player.speed.toStringAsFixed(2)} كم/ساعة"),
+              _buildResultRow("قوة الضربة", "${player.shotPower.toStringAsFixed(0)} نيوتن"),
+              _buildResultRow("قدرة التحمل", "${player.stamina.toStringAsFixed(1)}%"),
+              _buildResultRow("قوة الجسم", "${player.bodyStrength.toStringAsFixed(1)} كجم"),
+              _buildResultRow("الاتزان", "${player.balance.toStringAsFixed(1)}%"),
+              _buildResultRow("معدل الجهد", "${player.effortIndex.toStringAsFixed(1)}%"),
+              const Divider(),
+              _buildResultRow(
+                "النتيجة الإجمالية",
+                "${player.overallScore.toStringAsFixed(1)}%",
+                isBold: true,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                "تحليل الأداء: ${player.statusText}",
+                style: TextStyle(
+                  color: _getScoreColor(player.overallScore),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PlayerMetricsListView(playerId: widget.playerId),
+                ),
+              );
+            },
+            child: const Text("عرض جميع المواصفات"),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.pop(context); // العودة لصفحة معلومات اللاعب
+            },
+            child: const Text("تم"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResultRow(String label, String value, {bool isBold = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: isBold ? 16 : 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _formatTime(int seconds) {
     final hours = seconds ~/ 3600;
     final minutes = (seconds % 3600) ~/ 60;
@@ -147,6 +262,14 @@ class _PlayerTrainingViewState extends State<PlayerTrainingView> {
       return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
     }
     return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+  }
+
+  Color _getScoreColor(double score) {
+    if (score >= 80) return Colors.green;
+    if (score >= 65) return Colors.lightGreen;
+    if (score >= 50) return Colors.orange;
+    if (score >= 35) return Colors.deepOrange;
+    return Colors.red;
   }
 
   @override
@@ -198,7 +321,50 @@ class _PlayerTrainingViewState extends State<PlayerTrainingView> {
                 ),
               ),
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 24),
+
+            // حقول إدخال قوة الضربة
+            if (!_isRunning) ...[
+              Card(
+                elevation: 4,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "إدخال بيانات قوة الضربة",
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _ballMassController,
+                        decoration: const InputDecoration(
+                          labelText: "كتلة الكرة (كجم)",
+                          hintText: "0.43",
+                          border: OutlineInputBorder(),
+                        ),
+                        keyboardType: TextInputType.numberWithOptions(decimal: true),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _ballVelocityController,
+                        decoration: const InputDecoration(
+                          labelText: "سرعة الكرة (م/ث)",
+                          hintText: "20",
+                          border: OutlineInputBorder(),
+                        ),
+                        keyboardType: TextInputType.numberWithOptions(decimal: true),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+            ],
 
             // التايمر
             Card(
@@ -285,7 +451,9 @@ class _PlayerTrainingViewState extends State<PlayerTrainingView> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      "عند إيقاف التايمر، سيتم حفظ المواصفات بشكل تلقائي مع تحسينها بناءً على مدة التدريب.",
+                      _isRunning
+                          ? "التدريب قيد التشغيل..."
+                          : "أدخل بيانات قوة الضربة ثم ابدأ التدريب. عند الإيقاف، سيتم حساب قوة الضربة من المدخلات وباقي المواصفات ستكون عشوائية.",
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 14,
@@ -301,13 +469,4 @@ class _PlayerTrainingViewState extends State<PlayerTrainingView> {
       ),
     );
   }
-
-  Color _getScoreColor(double score) {
-    if (score >= 80) return Colors.green;
-    if (score >= 65) return Colors.lightGreen;
-    if (score >= 50) return Colors.orange;
-    if (score >= 35) return Colors.deepOrange;
-    return Colors.red;
-  }
 }
-
