@@ -19,7 +19,6 @@ class _AddUserViewState extends State<AddUserView> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _teamIdController = TextEditingController();
-  final _playerIdController = TextEditingController();
 
   String _selectedRole = 'coach';
   bool _isLoading = false;
@@ -34,9 +33,18 @@ class _AddUserViewState extends State<AddUserView> {
   // إنشاء معرف تلقائي بناءً على الاسم والرول
   String _generateUserId(String name, String role) {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final namePart = name.replaceAll(' ', '').toLowerCase().substring(0, name.length > 5 ? 5 : name.length);
+    final namePart = name.replaceAll(' ', '').toLowerCase();
+    final shortName = namePart.length > 5 ? namePart.substring(0, 5) : namePart;
     final rolePrefix = role == 'coach' ? 'coach' : role == 'player' ? 'player' : 'admin';
-    return '${rolePrefix}_${namePart}_$timestamp';
+    return '${rolePrefix}_${shortName}_$timestamp';
+  }
+
+  // إنشاء معرف تلقائي للاعب
+  String _generatePlayerId(String name) {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final namePart = name.replaceAll(' ', '').toLowerCase();
+    final shortName = namePart.length > 6 ? namePart.substring(0, 6) : namePart;
+    return 'player_${shortName}_$timestamp';
   }
 
   Future<void> _addUser() async {
@@ -56,6 +64,50 @@ class _AddUserViewState extends State<AddUserView> {
           attempts++;
         }
 
+        String? playerId;
+
+        // إذا كان لاعب، أنشئ لاعب جديد تلقائياً
+        if (_selectedRole == 'player') {
+          final playerService = PlayerService();
+          
+          // إنشاء معرف تلقائي للاعب
+          playerId = _generatePlayerId(_nameController.text.trim());
+          
+          // التأكد من أن المعرف غير مستخدم
+          int attempts = 0;
+          while (attempts < 10) {
+            try {
+              await playerService.getPlayerById(playerId!).first.timeout(
+                const Duration(milliseconds: 100),
+              );
+              // إذا وصل هنا، المعرف مستخدم، أنشئ واحد جديد
+              playerId = _generatePlayerId(_nameController.text.trim());
+              attempts++;
+            } catch (e) {
+              // المعرف غير مستخدم، يمكن استخدامه
+              break;
+            }
+          }
+
+          // إنشاء لاعب جديد بقيم افتراضية
+          final defaultPlayer = PlayerModel(
+            id: playerId!,
+            name: _nameController.text.trim(),
+            teamId: _teamIdController.text.trim(),
+            positionType: 'substitute',
+            roleInTeam: 'reserve',
+            speed: 15.0,
+            shotPower: 2000.0,
+            stamina: 50.0,
+            bodyStrength: 100.0,
+            balance: 50.0,
+            effortIndex: 50.0,
+          );
+
+          // إضافة اللاعب إلى قاعدة البيانات
+          await playerService.addPlayerWithId(defaultPlayer);
+        }
+
         // إنشاء المستخدم
         final user = UserModel(
           id: userId,
@@ -66,31 +118,10 @@ class _AddUserViewState extends State<AddUserView> {
               ? null
               : _emailController.text.trim(),
           password: _passwordController.text,
-          playerId: _selectedRole == 'player' && _playerIdController.text.trim().isNotEmpty
-              ? _playerIdController.text.trim()
-              : null,
+          playerId: playerId,
         );
 
         await userService.addUser(user);
-
-        // إذا كان لاعب، تأكد من وجود لاعب في قاعدة البيانات
-        if (_selectedRole == 'player' && _playerIdController.text.trim().isNotEmpty) {
-          final playerService = PlayerService();
-          try {
-            final player = await playerService.getPlayerById(_playerIdController.text.trim()).first;
-            // اللاعب موجود
-          } catch (e) {
-            // اللاعب غير موجود - يمكن إضافة رسالة تحذير
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text("تم إضافة المستخدم، لكن اللاعب غير موجود في قاعدة البيانات"),
-                  backgroundColor: Colors.orange,
-                ),
-              );
-            }
-          }
-        }
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -272,18 +303,6 @@ class _AddUserViewState extends State<AddUserView> {
                           );
                         },
                       ),
-                      if (_selectedRole == 'player') ...[
-                        const SizedBox(height: 16),
-                        TextFormField(
-                          controller: _playerIdController,
-                          decoration: const InputDecoration(
-                            labelText: "معرف اللاعب",
-                            hintText: "معرف اللاعب في قاعدة البيانات",
-                            prefixIcon: Icon(Icons.sports_soccer),
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ],
                     ],
                   ),
                 ),
@@ -328,7 +347,6 @@ class _AddUserViewState extends State<AddUserView> {
     _emailController.dispose();
     _passwordController.dispose();
     _teamIdController.dispose();
-    _playerIdController.dispose();
     super.dispose();
   }
 }
