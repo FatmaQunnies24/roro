@@ -1,13 +1,21 @@
 import 'package:flutter/material.dart';
-import '../service/player_service.dart';
-import '../model/team_model.dart';
-import 'players_list_view.dart';
+import '../service/user_service.dart';
+import '../model/user_model.dart';
+import 'coach_main_content_view.dart';
 import 'add_player_view.dart';
+import 'login_view.dart';
 
-class CoachHomeView extends StatelessWidget {
+class CoachHomeView extends StatefulWidget {
   final String teamId;
 
   const CoachHomeView({super.key, required this.teamId});
+
+  @override
+  State<CoachHomeView> createState() => _CoachHomeViewState();
+}
+
+class _CoachHomeViewState extends State<CoachHomeView> {
+  int _currentIndex = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -15,104 +23,84 @@ class CoachHomeView extends StatelessWidget {
       appBar: AppBar(
         title: const Text("لوحة المدرب"),
         backgroundColor: Colors.blue[700],
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.person_add),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => AddPlayerView(teamId: widget.teamId),
+                ),
+              );
+            },
+            tooltip: "إضافة لاعب جديد",
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () {
+              _showLogoutDialog(context);
+            },
+            tooltip: "تسجيل الخروج",
+          ),
+        ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            // بطاقة ترحيبية
-            Card(
-              elevation: 4,
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  children: [
-                    const Icon(
-                      Icons.sports_soccer,
-                      size: 64,
-                      color: Colors.blue,
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "مرحباً أيها المدرب",
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      "فريق: $teamId",
-                      style: TextStyle(
-                        fontSize: 18,
-                        color: Colors.blue[700],
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
+      body: CoachMainContentView(
+        currentIndex: _currentIndex,
+        teamId: widget.teamId,
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _currentIndex,
+        onTap: (index) {
+          setState(() {
+            _currentIndex = index;
+          });
+        },
+        type: BottomNavigationBarType.fixed,
+        selectedItemColor: Colors.blue[700],
+        unselectedItemColor: Colors.grey,
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.home),
+            label: "الرئيسية",
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.group),
+            label: "الفرق",
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.sports),
+            label: "اللاعبين",
+          ),
+        ],
+      ),
+    );
+  }
 
-            // زر عرض اللاعبين
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => PlayersListView(teamId: teamId),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.people, size: 28),
-                label: const Text(
-                  "عرض اللاعبين",
-                  style: TextStyle(fontSize: 18),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue[700],
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 20),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // زر إضافة لاعب
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => AddPlayerView(teamId: teamId),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.person_add, size: 28),
-                label: const Text(
-                  "إضافة لاعب جديد",
-                  style: TextStyle(fontSize: 18),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green[700],
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 20),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
+  void _showLogoutDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("تسجيل الخروج"),
+        content: const Text("هل أنت متأكد من تسجيل الخروج؟"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("إلغاء"),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginView()),
+                (route) => false,
+              );
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text("تسجيل الخروج"),
+          ),
+        ],
       ),
     );
   }

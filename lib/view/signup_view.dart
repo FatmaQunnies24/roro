@@ -89,6 +89,7 @@ class _SignUpViewState extends State<SignUpView> {
         // إنشاء لاعب جديد بقيم افتراضية
         final defaultPlayer = PlayerModel(
           id: playerId,
+          userId: _userIdController.text.trim(), // ربط اللاعب بالمستخدم
           name: _nameController.text.trim(),
           teamId: _teamIdController.text.trim(),
           positionType: 'substitute', // افتراضي: احتياطي

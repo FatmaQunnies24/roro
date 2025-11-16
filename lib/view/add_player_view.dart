@@ -120,8 +120,12 @@ class _AddPlayerViewState extends State<AddPlayerView> {
           }
         }
 
+        // في AddPlayerView، المدرب يضيف لاعب جديد مباشرة
+        // لكن يجب أن يكون هناك user موجود أولاً
+        // لذا سنستخدم playerId كـ userId مؤقتاً
         final player = PlayerModel(
           id: playerId,
+          userId: playerId, // مؤقتاً، يجب أن يكون هناك user موجود
           name: _nameController.text.trim(),
           teamId: widget.teamId,
           positionType: _selectedPosition,

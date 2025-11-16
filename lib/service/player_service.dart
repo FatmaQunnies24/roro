@@ -45,4 +45,29 @@ class PlayerService {
       );
     });
   }
+
+  /// جلب اللاعبين غير المنتسبين (بدون فريق أو teamId فارغ)
+  Stream<List<PlayerModel>> getUnassignedPlayers() {
+    return _playersRef
+        .where('teamId', isEqualTo: '')
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map(
+                (doc) => PlayerModel.fromMap(
+                  doc.id,
+                  doc.data(),
+                ),
+              )
+              .toList(),
+        );
+  }
+
+  /// جلب عدد اللاعبين غير المنتسبين
+  Future<int> getUnassignedPlayersCount() async {
+    final snapshot = await _playersRef
+        .where('teamId', isEqualTo: '')
+        .get();
+    return snapshot.docs.length;
+  }
 }

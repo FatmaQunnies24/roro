@@ -92,6 +92,7 @@ class _AddUserViewState extends State<AddUserView> {
           // إنشاء لاعب جديد بقيم افتراضية
           final defaultPlayer = PlayerModel(
             id: playerId!,
+            userId: userId, // ربط اللاعب بالمستخدم
             name: _nameController.text.trim(),
             teamId: _teamIdController.text.trim(),
             positionType: 'substitute',

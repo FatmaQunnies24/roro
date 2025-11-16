@@ -2,6 +2,7 @@ import '../utils/player_metrics_calculator.dart';
 
 class PlayerModel {
   final String id;
+  final String userId; // معرف المستخدم المرتبط
   final String name;
   final String teamId;
   final String positionType;
@@ -17,6 +18,7 @@ class PlayerModel {
 
   PlayerModel({
     required this.id,
+    required this.userId,
     required this.name,
     required this.teamId,
     required this.positionType,
@@ -54,6 +56,7 @@ class PlayerModel {
   factory PlayerModel.fromMap(String id, Map<String, dynamic> data) {
     return PlayerModel(
       id: id,
+      userId: data['userId'] ?? '',
       name: data['name'] ?? '',
       teamId: data['teamId'] ?? '',
       positionType: data['positionType'] ?? '',
@@ -71,6 +74,7 @@ class PlayerModel {
 
   Map<String, dynamic> toMap() {
     return {
+      'userId': userId,
       'name': name,
       'teamId': teamId,
       'positionType': positionType,
