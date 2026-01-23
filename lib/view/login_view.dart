@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import '../service/user_service.dart';
-import '../model/user_model.dart';
-import 'coach_home_view.dart';
-import 'player_home_view.dart';
-import 'admin_home_view.dart';
+import 'home_view.dart';
+import 'signup_view.dart';
 
 class LoginView extends StatefulWidget {
   const LoginView({super.key});
@@ -26,7 +24,7 @@ class _LoginViewState extends State<LoginView> {
       try {
         final userService = UserService();
         final user = await userService.login(
-          _userIdController.text.trim(),
+          _userIdController.text.trim().toLowerCase(),
           _passwordController.text,
         );
 
@@ -43,47 +41,14 @@ class _LoginViewState extends State<LoginView> {
           return;
         }
 
-        // توجيه المستخدم حسب نوعه
+        // توجيه المستخدم إلى الصفحة الرئيسية
         if (mounted) {
-          final role = user.role.toLowerCase();
-          if (role == 'admin' || role == 'أدمن') {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (_) => AdminHomeView(),
-              ),
-            );
-          } else if (role == 'coach' || role == 'مدرب') {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (_) => CoachHomeView(teamId: user.teamId),
-              ),
-            );
-          } else if (role == 'player' || role == 'لاعب') {
-            if (user.playerId != null) {
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => PlayerHomeView(playerId: user.playerId!),
-                ),
-              );
-            } else {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text("معرف اللاعب غير موجود"),
-                  backgroundColor: Colors.red,
-                ),
-              );
-            }
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text("نوع المستخدم غير معروف"),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => HomeView(userId: user.id),
+            ),
+          );
         }
       } catch (e) {
         if (mounted) {
@@ -105,43 +70,48 @@ class _LoginViewState extends State<LoginView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+        appBar: AppBar(
         title: const Text("تسجيل الدخول"),
-        backgroundColor: Colors.green[700],
+        backgroundColor: Colors.blue[700],
       ),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: Form(
             key: _formKey,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
                 const Icon(
-                  Icons.sports_soccer,
+                  Icons.psychology,
                   size: 100,
-                  color: Colors.green,
+                  color: Colors.blue,
                 ),
                 const SizedBox(height: 40),
                 const Text(
-                  "تطبيق كرة القدم",
+                  "تقييم التوتر المرتبط بالألعاب الرقمية",
                   style: TextStyle(
-                    fontSize: 28,
+                    fontSize: 24,
                     fontWeight: FontWeight.bold,
                   ),
+                  textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 40),
                 TextFormField(
                   controller: _userIdController,
                   decoration: const InputDecoration(
-                    labelText: "معرف المستخدم أو البريد الإلكتروني",
-                    hintText: "أدخل المعرف أو البريد الإلكتروني",
-                    prefixIcon: Icon(Icons.person),
+                    labelText: "البريد الإلكتروني",
+                    hintText: "أدخل البريد الإلكتروني",
+                    prefixIcon: Icon(Icons.email),
                     border: OutlineInputBorder(),
                   ),
+                  keyboardType: TextInputType.emailAddress,
                   validator: (value) {
                     if (value == null || value.isEmpty) {
-                      return "يرجى إدخال المعرف أو البريد الإلكتروني";
+                      return "يرجى إدخال البريد الإلكتروني";
+                    }
+                    if (!value.contains('@')) {
+                      return "يرجى إدخال بريد إلكتروني صحيح";
                     }
                     return null;
                   },
@@ -159,7 +129,7 @@ class _LoginViewState extends State<LoginView> {
                       icon: Icon(
                         _obscurePassword ? Icons.visibility : Icons.visibility_off,
                       ),
-                      onPressed: () {
+                onPressed: () {
                         setState(() => _obscurePassword = !_obscurePassword);
                       },
                     ),
@@ -180,7 +150,7 @@ class _LoginViewState extends State<LoginView> {
                   child: ElevatedButton(
                     onPressed: _isLoading ? null : _login,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green[700],
+                      backgroundColor: Colors.blue[700],
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
@@ -202,16 +172,22 @@ class _LoginViewState extends State<LoginView> {
                           ),
                   ),
                 ),
-                const SizedBox(height: 8),
-                const Text(
-                  "ملاحظة: استخدم معرف المستخدم أو البريد الإلكتروني مع كلمة المرور",
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey,
+                const SizedBox(height: 16),
+                TextButton(
+                onPressed: () {
+                  Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const SignUpView(),
+                      ),
+                    );
+                },
+                  child: const Text(
+                    "ليس لديك حساب؟ إنشاء حساب جديد",
+                    style: TextStyle(fontSize: 16),
                   ),
-                  textAlign: TextAlign.center,
                 ),
-              ],
+          ],
             ),
           ),
         ),

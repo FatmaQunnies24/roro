@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
 import '../service/user_service.dart';
-import '../service/player_service.dart';
 import '../model/user_model.dart';
-import '../model/player_model.dart';
-import '../utils/player_metrics_calculator.dart';
-import 'player_home_view.dart';
+import 'home_view.dart';
 
 class SignUpView extends StatefulWidget {
   const SignUpView({super.key});
@@ -17,20 +14,12 @@ class _SignUpViewState extends State<SignUpView> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
-  final _userIdController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
-  final _teamIdController = TextEditingController();
 
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _teamIdController.text = 'team01'; // قيمة افتراضية
-  }
 
   Future<void> _signUp() async {
     if (_formKey.currentState!.validate()) {
@@ -49,15 +38,14 @@ class _SignUpViewState extends State<SignUpView> {
 
       try {
         final userService = UserService();
-        final playerService = PlayerService();
 
-        // التحقق من أن المعرف غير مستخدم
-        final existingUser = await userService.getUserById(_userIdController.text.trim());
-        if (existingUser != null) {
+        // التحقق من أن البريد الإلكتروني غير مستخدم
+        final existingEmail = await userService.findUserByEmail(_emailController.text.trim().toLowerCase());
+        if (existingEmail != null) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text("المعرف مستخدم بالفعل، يرجى اختيار معرف آخر"),
+                content: Text("البريد الإلكتروني مستخدم بالفعل"),
                 backgroundColor: Colors.red,
               ),
             );
@@ -66,56 +54,15 @@ class _SignUpViewState extends State<SignUpView> {
           return;
         }
 
-        // التحقق من أن البريد الإلكتروني غير مستخدم
-        if (_emailController.text.trim().isNotEmpty) {
-          final existingEmail = await userService.findUserByEmailOrId(_emailController.text.trim());
-          if (existingEmail != null) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text("البريد الإلكتروني مستخدم بالفعل"),
-                  backgroundColor: Colors.red,
-                ),
-              );
-            }
-            setState(() => _isLoading = false);
-            return;
-          }
-        }
-
-        // إنشاء معرف فريد للاعب
-        final playerId = 'player_${_userIdController.text.trim()}';
-
-        // إنشاء لاعب جديد بقيم افتراضية
-        final defaultPlayer = PlayerModel(
-          id: playerId,
-          userId: _userIdController.text.trim(), // ربط اللاعب بالمستخدم
-          name: _nameController.text.trim(),
-          teamId: _teamIdController.text.trim(),
-          positionType: 'substitute', // افتراضي: احتياطي
-          roleInTeam: 'reserve', // افتراضي: احتياطي
-          speed: 15.0, // قيمة افتراضية
-          shotPower: 2000.0, // قيمة افتراضية
-          stamina: 50.0, // قيمة افتراضية
-          bodyStrength: 100.0, // قيمة افتراضية
-          balance: 50.0, // قيمة افتراضية
-          effortIndex: 50.0, // قيمة افتراضية
-        );
-
-        // إضافة اللاعب إلى قاعدة البيانات بمعرف محدد
-        await playerService.addPlayerWithId(defaultPlayer);
+        // إنشاء معرف فريد للمستخدم (استخدام البريد الإلكتروني)
+        final userId = _emailController.text.trim().toLowerCase();
 
         // إنشاء المستخدم
         final user = UserModel(
-          id: _userIdController.text.trim(),
+          id: userId,
           name: _nameController.text.trim(),
-          role: 'player', // دائماً لاعب عند التسجيل
-          teamId: _teamIdController.text.trim(),
-          email: _emailController.text.trim().isEmpty
-              ? null
-              : _emailController.text.trim(),
+          email: _emailController.text.trim().toLowerCase(),
           password: _passwordController.text,
-          playerId: playerId, // ربط المستخدم باللاعب
         );
 
         // إضافة المستخدم إلى قاعدة البيانات
@@ -129,11 +76,11 @@ class _SignUpViewState extends State<SignUpView> {
             ),
           );
 
-          // توجيه المستخدم إلى صفحة اللاعب
+          // توجيه المستخدم إلى الصفحة الرئيسية
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
-              builder: (_) => PlayerHomeView(playerId: playerId),
+              builder: (_) => HomeView(userId: userId),
             ),
           );
         }
@@ -157,9 +104,9 @@ class _SignUpViewState extends State<SignUpView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+        appBar: AppBar(
         title: const Text("إنشاء حساب جديد"),
-        backgroundColor: Colors.green[700],
+        backgroundColor: Colors.blue[700],
       ),
       body: Center(
         child: SingleChildScrollView(
@@ -172,11 +119,11 @@ class _SignUpViewState extends State<SignUpView> {
                 const Icon(
                   Icons.person_add,
                   size: 80,
-                  color: Colors.green,
+                  color: Colors.blue,
                 ),
                 const SizedBox(height: 20),
                 const Text(
-                  "إنشاء حساب لاعب جديد",
+                  "إنشاء حساب جديد",
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
@@ -200,47 +147,20 @@ class _SignUpViewState extends State<SignUpView> {
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
-                  controller: _userIdController,
-                  decoration: const InputDecoration(
-                    labelText: "معرف المستخدم *",
-                    hintText: "مثال: player123",
-                    prefixIcon: Icon(Icons.badge),
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return "يرجى إدخال معرف المستخدم";
-                    }
-                    if (value.length < 3) {
-                      return "المعرف يجب أن يكون 3 أحرف على الأقل";
-                    }
-                    return null;
-                  },
-                  textInputAction: TextInputAction.next,
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
                   controller: _emailController,
                   decoration: const InputDecoration(
-                    labelText: "البريد الإلكتروني",
+                    labelText: "البريد الإلكتروني *",
                     hintText: "example@email.com",
                     prefixIcon: Icon(Icons.email),
                     border: OutlineInputBorder(),
                   ),
                   keyboardType: TextInputType.emailAddress,
-                  textInputAction: TextInputAction.next,
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _teamIdController,
-                  decoration: const InputDecoration(
-                    labelText: "معرف الفريق *",
-                    prefixIcon: Icon(Icons.group),
-                    border: OutlineInputBorder(),
-                  ),
                   validator: (value) {
                     if (value == null || value.isEmpty) {
-                      return "يرجى إدخال معرف الفريق";
+                      return "يرجى إدخال البريد الإلكتروني";
+                    }
+                    if (!value.contains('@')) {
+                      return "يرجى إدخال بريد إلكتروني صحيح";
                     }
                     return null;
                   },
@@ -309,7 +229,7 @@ class _SignUpViewState extends State<SignUpView> {
                   child: ElevatedButton(
                     onPressed: _isLoading ? null : _signUp,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green[700],
+                      backgroundColor: Colors.blue[700],
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
@@ -353,10 +273,8 @@ class _SignUpViewState extends State<SignUpView> {
   void dispose() {
     _nameController.dispose();
     _emailController.dispose();
-    _userIdController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
-    _teamIdController.dispose();
     super.dispose();
   }
 }

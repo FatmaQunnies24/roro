@@ -1,0 +1,17 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // قواعد للمستخدمين
+    match /users/{userId} {
+      // السماح بالقراءة والكتابة للجميع (للتطوير)
+      allow read, write: if true;
+    }
+    
+    // قواعد للتقييمات
+    match /assessments/{assessmentId} {
+      // السماح بالقراءة والكتابة للجميع (للتطوير)
+      allow read, write: if true;
+    }
+  }
+}
+

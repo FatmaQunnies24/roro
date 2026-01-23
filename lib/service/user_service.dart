@@ -1,6 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../model/user_model.dart';
-import 'team_service.dart';
 
 class UserService {
   final CollectionReference<Map<String, dynamic>> _usersRef =
@@ -19,18 +18,11 @@ class UserService {
     }
   }
 
-  /// البحث عن مستخدم بالبريد الإلكتروني أو المعرف
-  Future<UserModel?> findUserByEmailOrId(String emailOrId) async {
+  /// البحث عن مستخدم بالبريد الإلكتروني
+  Future<UserModel?> findUserByEmail(String email) async {
     try {
-      // البحث بالمعرف أولاً
-      final doc = await _usersRef.doc(emailOrId).get();
-      if (doc.exists && doc.data() != null) {
-        return UserModel.fromMap(doc.id, doc.data()!);
-      }
-
-      // البحث بالبريد الإلكتروني
       final snapshot = await _usersRef
-          .where('email', isEqualTo: emailOrId)
+          .where('email', isEqualTo: email)
           .limit(1)
           .get();
 
@@ -45,14 +37,9 @@ class UserService {
     }
   }
 
-  /// التحقق من كلمة المرور
-  Future<bool> verifyPassword(UserModel user, String password) async {
-    return user.password == password;
-  }
-
-  /// تسجيل الدخول بالبريد/المعرف وكلمة المرور
-  Future<UserModel?> login(String emailOrId, String password) async {
-    final user = await findUserByEmailOrId(emailOrId);
+  /// تسجيل الدخول بالبريد الإلكتروني وكلمة المرور
+  Future<UserModel?> login(String email, String password) async {
+    final user = await findUserByEmail(email);
     if (user != null && user.password == password) {
       return user;
     }
@@ -62,51 +49,11 @@ class UserService {
   /// إضافة مستخدم جديد
   Future<void> addUser(UserModel user) async {
     await _usersRef.doc(user.id).set(user.toMap());
-    
-    // تحديث عدد المستخدمين في الفريق
-    try {
-      final teamService = TeamService();
-      await teamService.updateTeamCounts(user.teamId);
-    } catch (e) {
-      // تجاهل الخطأ إذا كان الفريق غير موجود
-      print('خطأ في تحديث عدد المستخدمين: $e');
-    }
   }
 
   /// تحديث معلومات المستخدم
   Future<void> updateUser(UserModel user) async {
     await _usersRef.doc(user.id).update(user.toMap());
-  }
-
-  /// جلب جميع المستخدمين
-  Stream<List<UserModel>> getAllUsers() {
-    return _usersRef.snapshots().map(
-          (snapshot) => snapshot.docs
-              .map(
-                (doc) => UserModel.fromMap(
-                  doc.id,
-                  doc.data(),
-                ),
-              )
-              .toList(),
-        );
-  }
-
-  /// جلب المستخدمين حسب الرول
-  Stream<List<UserModel>> getUsersByRole(String role) {
-    return _usersRef
-        .where('role', isEqualTo: role)
-        .snapshots()
-        .map(
-          (snapshot) => snapshot.docs
-              .map(
-                (doc) => UserModel.fromMap(
-                  doc.id,
-                  doc.data(),
-                ),
-              )
-              .toList(),
-        );
   }
 
   /// حذف مستخدم

@@ -1,4 +1,0 @@
-enum UserRole {
-  coach,
-  player,
-}
