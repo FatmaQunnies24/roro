@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">football_app</string>
-    <string name="accessibility_service_description">نحتاج إلى هذا الإذن لعد الضغطات أثناء اللعب في التطبيقات الأخرى</string>
+    <string name="accessibility_service_description">خدمة مراقبة الضغطات لتطبيق تقييم التوتر - نحتاج إلى هذا الإذن لعد الضغطات أثناء اللعب في التطبيقات الأخرى</string>
 </resources>
 

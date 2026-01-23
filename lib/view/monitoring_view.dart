@@ -4,10 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
-import 'package:flutter_background_service_android/flutter_background_service_android.dart';
 import '../service/assessment_service.dart';
 import '../model/assessment_model.dart';
 import '../utils/stress_calculator.dart';
+import '../utils/background_service.dart';
+import '../utils/accessibility_helper.dart';
 import 'assessment_details_view.dart';
 
 class MonitoringView extends StatefulWidget {
@@ -63,8 +64,16 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       _saveData(); // حفظ فوري عند الخروج
       debugPrint('التطبيق في الخلفية - المراقبة مستمرة');
     } else if (state == AppLifecycleState.resumed) {
-      // التطبيق عاد للمقدمة
+      // التطبيق عاد للمقدمة - تحديث البيانات من Accessibility Service
       _loadSavedData(); // استعادة البيانات
+      // تحديث دوري للبيانات من Accessibility Service
+      Timer.periodic(const Duration(seconds: 2), (timer) {
+        if (!_isMonitoring || !mounted) {
+          timer.cancel();
+          return;
+        }
+        _loadSavedData();
+      });
       debugPrint('التطبيق عاد للمقدمة - تم استعادة البيانات');
     }
   }
@@ -79,19 +88,32 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       final savedSoundLevels = prefs.getString('monitoring_soundLevels');
       final wasActive = prefs.getBool('monitoring_isActive') ?? false;
       
-      setState(() {
-        _tapCount = savedTapCount;
-        _monitoringDuration = savedDuration;
-        _screamCount = savedScreamCount;
-        if (savedSoundLevels != null && savedSoundLevels.isNotEmpty) {
-          _soundLevels = savedSoundLevels.split(',').map((e) => double.tryParse(e) ?? 0.0).toList();
-        }
-        // إذا كانت المراقبة نشطة، نستمر
-        if (wasActive && !_isMonitoring) {
-          _isMonitoring = true;
-          _startMonitoring();
-        }
-      });
+      // تحديث القيم فقط إذا كانت أكبر (لتجنب فقدان البيانات من Accessibility Service)
+      if (mounted) {
+        setState(() {
+          // استخدام القيمة الأكبر بين المحفوظة والحالية (لضمان عدم فقدان البيانات من Accessibility Service)
+          if (savedTapCount > _tapCount) {
+            _tapCount = savedTapCount;
+          }
+          if (savedDuration > _monitoringDuration) {
+            _monitoringDuration = savedDuration;
+          }
+          if (savedScreamCount > _screamCount) {
+            _screamCount = savedScreamCount;
+          }
+          if (savedSoundLevels != null && savedSoundLevels.isNotEmpty) {
+            final newLevels = savedSoundLevels.split(',').map((e) => double.tryParse(e) ?? 0.0).toList();
+            if (newLevels.length > _soundLevels.length) {
+              _soundLevels = newLevels;
+            }
+          }
+          // إذا كانت المراقبة نشطة، نستمر
+          if (wasActive && !_isMonitoring) {
+            _isMonitoring = true;
+            _startMonitoring();
+          }
+        });
+      }
       debugPrint('تم تحميل البيانات: taps=$savedTapCount, duration=$savedDuration, screams=$savedScreamCount');
     } catch (e) {
       debugPrint('خطأ في تحميل البيانات: $e');
@@ -117,11 +139,70 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     // طلب إذن الميكروفون (للمستقبل عند إضافة قراءة فعلية للصوت)
     await Permission.microphone.request();
     
+    // التحقق من تفعيل Accessibility Service
+    final isAccessibilityEnabled = await AccessibilityHelper.isAccessibilityServiceEnabled();
+    if (!isAccessibilityEnabled && mounted) {
+      _showAccessibilityDialog();
+    }
+    
+    // تهيئة الخدمة الخلفية
+    await _initializeBackgroundService();
+    
     // بدء المراقبة حتى بدون إذن (سنستخدم محاكاة)
     _startMonitoring();
   }
 
-  void _startMonitoring() {
+  void _showAccessibilityDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('تفعيل خدمة المراقبة'),
+        content: const Text(
+          'لعد الضغطات في التطبيقات الأخرى، نحتاج إلى تفعيل خدمة إمكانية الوصول.\n\n'
+          'سيتم فتح إعدادات Android. ابحث عن "football_app" أو "TapMonitoringService" وفعّلها.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+            },
+            child: const Text('لاحقاً'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await AccessibilityHelper.openAccessibilitySettings();
+            },
+            child: const Text('فتح الإعدادات'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _initializeBackgroundService() async {
+    final service = FlutterBackgroundService();
+    
+    await service.configure(
+      androidConfiguration: AndroidConfiguration(
+        onStart: onStart,
+        autoStart: false,
+        isForegroundMode: true,
+        notificationChannelId: 'monitoring_channel',
+        initialNotificationTitle: 'مراقبة تلقائية',
+        initialNotificationContent: 'جاري المراقبة...',
+        foregroundServiceNotificationId: 888,
+      ),
+      iosConfiguration: IosConfiguration(
+        autoStart: false,
+        onForeground: onStart,
+        onBackground: onIosBackground,
+      ),
+    );
+  }
+
+  void _startMonitoring() async {
     setState(() {
       _isMonitoring = true;
       _soundLevels = [];
@@ -130,12 +211,21 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     // حفظ حالة المراقبة
     _saveData();
 
+    // بدء الخدمة الخلفية
+    final service = FlutterBackgroundService();
+    service.invoke('setAsForeground');
+    service.invoke('startMonitoring');
+
     // مؤقت لتحديث مدة المراقبة - يعمل حتى في الخلفية
     _monitoringTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_isMonitoring) {
         // تحديث المدة حتى لو كان التطبيق في الخلفية
         _monitoringDuration++;
         _saveData(); // حفظ البيانات كل ثانية
+        
+        // تحديث البيانات من الخدمة الخلفية
+        _loadSavedData();
+        
         if (mounted) {
           setState(() {});
         }
@@ -149,10 +239,12 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       }
     });
 
-    // مؤقت لحفظ البيانات كل 3 ثوان (لضمان عدم فقدان البيانات)
-    _saveTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+    // مؤقت لحفظ البيانات كل ثانيتين (لضمان عدم فقدان البيانات)
+    _saveTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
       if (_isMonitoring) {
         _saveData();
+        // تحديث دوري من Accessibility Service (يعمل حتى في الخلفية)
+        _loadSavedData();
       }
     });
   }
@@ -164,6 +256,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       final random = Random();
       // محاكاة مستويات صوت واقعية
       double soundLevel;
+      bool isScream = false;
       
       // زيادة احتمالية الصرخات عند زيادة الضغطات (مؤشر على التوتر)
       double screamProbability = 0.05; // 5% أساسي
@@ -174,11 +267,13 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         screamProbability = 0.25; // 25% عند كثرة الضغطات جداً
       }
       
+      // فقط إذا كانت هناك صرخة فعلية
       if (random.nextDouble() < screamProbability) {
         // صرخة - مستوى صوت عالي جداً
         soundLevel = 75 + random.nextDouble() * 25; // 75-100
+        isScream = true;
       } else {
-        // صوت طبيعي
+        // صوت طبيعي - مستوى منخفض
         soundLevel = 10 + random.nextDouble() * 40; // 10-50
       }
       
@@ -186,8 +281,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       _currentSoundLevel = soundLevel;
       _soundLevels.add(soundLevel);
       
-      // إذا كان مستوى الصوت عاليًا جدًا (أكثر من 75)، نعتبره صرخة
-      if (soundLevel > 75) {
+      // فقط عند الصراخ الفعلي (soundLevel > 75) نزيد العدد
+      if (isScream && soundLevel > 75) {
         _screamCount++;
         _saveData(); // حفظ فوري عند اكتشاف صرخة
       }
@@ -200,13 +295,17 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     }
   }
 
-  void _handleTap() {
+  void _handleTap() async {
     if (_isMonitoring) {
       setState(() {
         _tapCount++;
       });
       // حفظ فوري عند كل ضغطة
       _saveData();
+      
+      // إرسال للخدمة الخلفية
+      final service = FlutterBackgroundService();
+      service.invoke('incrementTap');
     }
   }
 
@@ -218,6 +317,14 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     _monitoringTimer?.cancel();
     _soundCheckTimer?.cancel();
     _saveTimer?.cancel();
+    
+    // إيقاف الخدمة الخلفية
+    final service = FlutterBackgroundService();
+    service.invoke('stopMonitoring');
+    service.invoke('setAsBackground');
+    
+    // تحميل البيانات النهائية من الخدمة الخلفية
+    await _loadSavedData();
     
     // حفظ نهائي قبل المتابعة
     await _saveData();
@@ -393,7 +500,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'الصوت والوقت يُقاسان في الخلفية. للضغطات، اضغط داخل التطبيق',
+                        'للضغطات في التطبيقات الأخرى: فعّل خدمة إمكانية الوصول من الإعدادات',
                         style: TextStyle(
                           fontSize: 11,
                           color: Colors.orange[800],
