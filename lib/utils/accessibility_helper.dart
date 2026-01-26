@@ -23,5 +23,15 @@ class AccessibilityHelper {
       return false;
     }
   }
+
+  /// الحصول على package name التطبيق النشط الحالي
+  static Future<String?> getCurrentAppPackage() async {
+    try {
+      final result = await _channel.invokeMethod<String>('getCurrentAppPackage');
+      return result;
+    } catch (e) {
+      return null;
+    }
+  }
 }
 

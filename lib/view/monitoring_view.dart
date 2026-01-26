@@ -27,6 +27,8 @@ class MonitoringView extends StatefulWidget {
 
 class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObserver {
   bool _isMonitoring = false;
+  bool _isInitializing = true; // لمنع الاستدعاء المزدوج
+  bool _hasStartedMonitoring = false; // للتأكد من عدم البدء مرتين
   
   int _tapCount = 0;
   List<double> _soundLevels = [];
@@ -41,9 +43,17 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   @override
   void initState() {
     super.initState();
+    debugPrint('=== initState: بدء تهيئة MonitoringView ===');
     WidgetsBinding.instance.addObserver(this);
+    
+    // تحميل البيانات أولاً
     _loadSavedData();
-    _requestPermissions();
+    
+    // ثم طلب الصلاحيات بعد تأخير بسيط لضمان أن الـ context جاهز
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      debugPrint('=== PostFrameCallback: طلب الصلاحيات ===');
+      _requestPermissions();
+    });
   }
 
   @override
@@ -63,6 +73,19 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       // التطبيق في الخلفية - لكن المراقبة تستمر
       _saveData(); // حفظ فوري عند الخروج
       debugPrint('التطبيق في الخلفية - المراقبة مستمرة');
+      
+      // عند انتقال التطبيق للخلفية لأول مرة، نطلب الإذن
+      if (_isMonitoring && !_hasRequestedPermissionForOtherApp) {
+        // انتظار قليل ثم التحقق من Accessibility Service
+        Future.delayed(const Duration(milliseconds: 1000), () async {
+          final isEnabled = await AccessibilityHelper.isAccessibilityServiceEnabled();
+          if (!isEnabled && mounted) {
+            _hasRequestedPermissionForOtherApp = true;
+            debugPrint('التطبيق في الخلفية - طلب إذن Accessibility لعد الضغطات في التطبيقات الأخرى');
+            _showAccessibilityDialog();
+          }
+        });
+      }
     } else if (state == AppLifecycleState.resumed) {
       // التطبيق عاد للمقدمة - تحديث البيانات من Accessibility Service
       _loadSavedData(); // استعادة البيانات
@@ -107,10 +130,14 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
               _soundLevels = newLevels;
             }
           }
-          // إذا كانت المراقبة نشطة، نستمر
-          if (wasActive && !_isMonitoring) {
-            _isMonitoring = true;
-            _startMonitoring();
+          // إذا كانت المراقبة نشطة، نستمر (لكن فقط بعد انتهاء التهيئة)
+          if (wasActive && !_isMonitoring && !_isInitializing && !_hasStartedMonitoring) {
+            // سنبدأ المراقبة بعد انتهاء التهيئة
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && !_hasStartedMonitoring) {
+                _startMonitoring();
+              }
+            });
           }
         });
       }
@@ -136,20 +163,107 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   }
 
   Future<void> _requestPermissions() async {
-    // طلب إذن الميكروفون (للمستقبل عند إضافة قراءة فعلية للصوت)
-    await Permission.microphone.request();
-    
-    // التحقق من تفعيل Accessibility Service
-    final isAccessibilityEnabled = await AccessibilityHelper.isAccessibilityServiceEnabled();
-    if (!isAccessibilityEnabled && mounted) {
-      _showAccessibilityDialog();
+    try {
+      debugPrint('بدء طلب الصلاحيات...');
+      
+      // طلب إذن الميكروفون (للمستقبل عند إضافة قراءة فعلية للصوت)
+      try {
+        final microphoneStatus = await Permission.microphone.status;
+        debugPrint('حالة إذن الميكروفون: $microphoneStatus');
+        
+        if (microphoneStatus.isDenied) {
+          final result = await Permission.microphone.request();
+          debugPrint('نتيجة طلب إذن الميكروفون: $result');
+        } else if (microphoneStatus.isPermanentlyDenied) {
+          debugPrint('إذن الميكروفون مرفوض بشكل دائم');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('يرجى تفعيل إذن الميكروفون من إعدادات التطبيق'),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 3),
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        debugPrint('خطأ في طلب إذن الميكروفون: $e');
+      }
+      
+      // لا نطلب إذن Accessibility Service تلقائياً عند فتح الشاشة
+      // سيتم التحقق منه فقط عند اكتشاف ضغطة في تطبيق آخر
+      debugPrint('تخطي طلب إذن Accessibility Service - سيتم طلبه عند اكتشاف ضغطة في تطبيق آخر');
+      
+      // تهيئة الخدمة الخلفية - معطلة مؤقتاً لتجنب مشكلة الإشعار
+      // await _initializeBackgroundService();
+      
+      // انتظار قليل
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      // إنهاء مرحلة التهيئة
+      if (mounted) {
+        setState(() {
+          _isInitializing = false;
+        });
+        
+        // بدء المراقبة حتى بدون إذن (سنستخدم محاكاة)
+        if (!_hasStartedMonitoring) {
+          debugPrint('بدء المراقبة...');
+          _startMonitoring();
+        }
+      }
+    } catch (e, stackTrace) {
+      debugPrint('خطأ في طلب الأذونات: $e');
+      debugPrint('Stack trace: $stackTrace');
+      // لا نوقف التطبيق، فقط نطبع الخطأ
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('تحذير: حدث خطأ في تهيئة المراقبة: $e'),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
     }
-    
-    // تهيئة الخدمة الخلفية
-    await _initializeBackgroundService();
-    
-    // بدء المراقبة حتى بدون إذن (سنستخدم محاكاة)
-    _startMonitoring();
+  }
+
+  bool _hasRequestedPermissionForOtherApp = false;
+
+  void _checkAccessibilityPeriodically() {
+    // التحقق من حالة Accessibility Service بشكل دوري
+    Timer.periodic(const Duration(seconds: 2), (timer) {
+      if (!_isMonitoring || !mounted) {
+        timer.cancel();
+        return;
+      }
+      
+      _checkAndRequestAccessibilityIfNeeded();
+    });
+  }
+
+  Future<void> _checkAndRequestAccessibilityIfNeeded() async {
+    try {
+      // التحقق من flag الذي يحدده TapMonitoringService
+      final prefs = await SharedPreferences.getInstance();
+      final shouldRequest = prefs.getBool('should_request_accessibility') ?? false;
+      
+      if (shouldRequest) {
+        // إزالة الـ flag
+        await prefs.setBool('should_request_accessibility', false);
+        
+        // التحقق من حالة Accessibility Service
+        final isEnabled = await AccessibilityHelper.isAccessibilityServiceEnabled();
+        
+        if (!isEnabled && mounted) {
+          // عرض نافذة طلب الإذن
+          debugPrint('تم اكتشاف ضغطة في تطبيق آخر - طلب إذن Accessibility');
+          _showAccessibilityDialog();
+        }
+      }
+    } catch (e) {
+      debugPrint('خطأ في التحقق من Accessibility: $e');
+    }
   }
 
   void _showAccessibilityDialog() {
@@ -158,9 +272,18 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         title: const Text('تفعيل خدمة المراقبة'),
-        content: const Text(
-          'لعد الضغطات في التطبيقات الأخرى، نحتاج إلى تفعيل خدمة إمكانية الوصول.\n\n'
-          'سيتم فتح إعدادات Android. ابحث عن "football_app" أو "TapMonitoringService" وفعّلها.',
+        content: const SingleChildScrollView(
+          child: Text(
+            'تم اكتشاف ضغطة في تطبيق آخر!\n\n'
+            'لعد الضغطات في التطبيقات الأخرى، نحتاج إلى تفعيل خدمة إمكانية الوصول.\n\n'
+            'الخطوات:\n'
+            '1. اضغط على زر "فتح الإعدادات" أدناه\n'
+            '2. ابحث عن "football_app" في قائمة "التطبيقات المثبتة"\n'
+            '3. اضغط على "football_app"\n'
+            '4. فعّل Toggle switch لخدمة Accessibility\n'
+            '5. اضغط "موافق" عند ظهور نافذة التحذير\n\n'
+            'بعد التفعيل، ارجع للتطبيق وسيتم تفعيل المراقبة تلقائياً.',
+          ),
         ),
         actions: [
           TextButton(
@@ -182,39 +305,97 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   }
 
   Future<void> _initializeBackgroundService() async {
-    final service = FlutterBackgroundService();
-    
-    await service.configure(
-      androidConfiguration: AndroidConfiguration(
-        onStart: onStart,
-        autoStart: false,
-        isForegroundMode: true,
-        notificationChannelId: 'monitoring_channel',
-        initialNotificationTitle: 'مراقبة تلقائية',
-        initialNotificationContent: 'جاري المراقبة...',
-        foregroundServiceNotificationId: 888,
-      ),
-      iosConfiguration: IosConfiguration(
-        autoStart: false,
-        onForeground: onStart,
-        onBackground: onIosBackground,
-      ),
-    );
+    try {
+      final service = FlutterBackgroundService();
+      
+      await service.configure(
+        androidConfiguration: AndroidConfiguration(
+          onStart: onStart,
+          autoStart: false,
+          isForegroundMode: false, // نبدأ كـ background ثم نحولها لاحقاً
+          notificationChannelId: 'monitoring_channel',
+          initialNotificationTitle: 'مراقبة تلقائية',
+          initialNotificationContent: 'جاري المراقبة...',
+          foregroundServiceNotificationId: 888,
+        ),
+        iosConfiguration: IosConfiguration(
+          autoStart: false,
+          onForeground: onStart,
+          onBackground: onIosBackground,
+        ),
+      );
+    } catch (e) {
+      debugPrint('خطأ في تهيئة الخدمة الخلفية: $e');
+      // لا نوقف التطبيق، فقط نطبع الخطأ
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('تحذير: فشل تهيئة الخدمة الخلفية: $e'),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
 
   void _startMonitoring() async {
-    setState(() {
-      _isMonitoring = true;
-      _soundLevels = [];
-    });
+    // منع الاستدعاء المزدوج
+    if (_hasStartedMonitoring || _isMonitoring) {
+      debugPrint('المراقبة جارية بالفعل أو تم البدء مسبقاً');
+      return;
+    }
+    
+    try {
+      _hasStartedMonitoring = true;
+      
+      if (!mounted) return;
+      
+      setState(() {
+        _isMonitoring = true;
+        _soundLevels = [];
+      });
 
-    // حفظ حالة المراقبة
-    _saveData();
+      // حفظ حالة المراقبة
+      _saveData();
 
-    // بدء الخدمة الخلفية
-    final service = FlutterBackgroundService();
-    service.invoke('setAsForeground');
-    service.invoke('startMonitoring');
+      // بدء الخدمة الخلفية - مؤقتاً معطل لتجنب مشكلة الإشعار
+      // TODO: إعادة تفعيل الخدمة الخلفية بعد إصلاح مشكلة الإشعار
+      /*
+      try {
+        final service = FlutterBackgroundService();
+        
+        // التحقق من أن الخدمة متاحة قبل الاستدعاء
+        final isRunning = await service.isRunning();
+        if (isRunning) {
+          // انتظار قليل قبل استدعاء الأوامر
+          await Future.delayed(const Duration(milliseconds: 500));
+          
+          // بدء المراقبة أولاً
+          try {
+            service.invoke('startMonitoring');
+          } catch (e) {
+            debugPrint('خطأ في startMonitoring: $e');
+          }
+          
+          // انتظار قليل لضمان إعداد الإشعار
+          await Future.delayed(const Duration(milliseconds: 300));
+          
+          // ثم تحويل الخدمة إلى foreground
+          try {
+            service.invoke('setAsForeground');
+          } catch (e) {
+            debugPrint('خطأ في setAsForeground: $e');
+          }
+        } else {
+          debugPrint('الخدمة الخلفية غير متاحة');
+        }
+      } catch (e) {
+        debugPrint('خطأ في بدء الخدمة الخلفية: $e');
+        // نستمر في المراقبة حتى لو فشلت الخدمة الخلفية
+      }
+      */
+      debugPrint('الخدمة الخلفية معطلة مؤقتاً لتجنب مشكلة الإشعار');
 
     // مؤقت لتحديث مدة المراقبة - يعمل حتى في الخلفية
     _monitoringTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -245,8 +426,40 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         _saveData();
         // تحديث دوري من Accessibility Service (يعمل حتى في الخلفية)
         _loadSavedData();
+        
+        // التحقق من حالة Accessibility Service بشكل دوري
+        AccessibilityHelper.isAccessibilityServiceEnabled().then((isEnabled) {
+          if (isEnabled && mounted) {
+            // إذا كان مفعلاً، نحدث الواجهة
+            setState(() {});
+          }
+        });
       }
     });
+
+    // التحقق من حالة Accessibility Service بشكل دوري عند بدء المراقبة
+    _checkAccessibilityPeriodically();
+    } catch (e, stackTrace) {
+      debugPrint('خطأ في بدء المراقبة: $e');
+      debugPrint('Stack trace: $stackTrace');
+      
+      // إعادة تعيين الـ flags في حالة الخطأ
+      _hasStartedMonitoring = false;
+      
+      // في حالة الخطأ، نعيد الحالة إلى الوضع الطبيعي
+      if (mounted) {
+        setState(() {
+          _isMonitoring = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('خطأ في بدء المراقبة: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
 
   void _checkSoundLevel() {
@@ -304,12 +517,22 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       _saveData();
       
       // إرسال للخدمة الخلفية
-      final service = FlutterBackgroundService();
-      service.invoke('incrementTap');
+      try {
+        final service = FlutterBackgroundService();
+        final isRunning = await service.isRunning();
+        if (isRunning) {
+          service.invoke('incrementTap');
+        }
+      } catch (e) {
+        debugPrint('خطأ في إرسال incrementTap: $e');
+        // نستمر حتى لو فشل الإرسال
+      }
     }
   }
 
   Future<void> _stopMonitoring() async {
+    _hasStartedMonitoring = false; // إعادة تعيين الـ flag
+    
     setState(() {
       _isMonitoring = false;
     });
@@ -319,9 +542,24 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     _saveTimer?.cancel();
     
     // إيقاف الخدمة الخلفية
-    final service = FlutterBackgroundService();
-    service.invoke('stopMonitoring');
-    service.invoke('setAsBackground');
+    try {
+      final service = FlutterBackgroundService();
+      final isRunning = await service.isRunning();
+      if (isRunning) {
+        try {
+          service.invoke('stopMonitoring');
+        } catch (e) {
+          debugPrint('خطأ في stopMonitoring: $e');
+        }
+        try {
+          service.invoke('setAsBackground');
+        } catch (e) {
+          debugPrint('خطأ في setAsBackground: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('خطأ في إيقاف الخدمة الخلفية: $e');
+    }
     
     // تحميل البيانات النهائية من الخدمة الخلفية
     await _loadSavedData();
@@ -487,24 +725,41 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
                           Icon(Icons.info_outline, color: Colors.orange[700], size: 20),
                           const SizedBox(width: 8),
                           Expanded(
-                            child: Text(
-                              'ملاحظة: الضغطات تُحسب فقط داخل التطبيق',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.orange[900],
-                              ),
+                            child: FutureBuilder<bool>(
+                              future: AccessibilityHelper.isAccessibilityServiceEnabled(),
+                              builder: (context, snapshot) {
+                                final isEnabled = snapshot.data ?? false;
+                                return Text(
+                                  isEnabled 
+                                    ? '✓ خدمة إمكانية الوصول مفعّلة - الضغطات في التطبيقات الأخرى تُحسب'
+                                    : 'ملاحظة: الضغطات تُحسب فقط داخل التطبيق',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: isEnabled ? Colors.green[900] : Colors.orange[900],
+                                  ),
+                                );
+                              },
                             ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        'للضغطات في التطبيقات الأخرى: فعّل خدمة إمكانية الوصول من الإعدادات',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.orange[800],
-                        ),
+                      FutureBuilder<bool>(
+                        future: AccessibilityHelper.isAccessibilityServiceEnabled(),
+                        builder: (context, snapshot) {
+                          final isEnabled = snapshot.data ?? false;
+                          if (isEnabled) {
+                            return const SizedBox.shrink();
+                          }
+                          return Text(
+                            'للضغطات في التطبيقات الأخرى: فعّل خدمة إمكانية الوصول من الإعدادات',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.orange[800],
+                            ),
+                          );
+                        },
                       ),
                     ],
                   ),

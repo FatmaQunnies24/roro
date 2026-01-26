@@ -6,8 +6,23 @@ import 'package:shared_preferences/shared_preferences.dart';
 @pragma('vm:entry-point')
 void onStart(ServiceInstance service) async {
   if (service is AndroidServiceInstance) {
+    // إعداد الإشعار في البداية (مهم لـ Android 14+)
+    service.setForegroundNotificationInfo(
+      title: 'مراقبة تلقائية',
+      content: 'جاري المراقبة...',
+    );
+    
+    // تحويل الخدمة إلى foreground بعد إعداد الإشعار
     service.on('setAsForeground').listen((event) {
-      service.setAsForegroundService();
+      // التأكد من وجود إشعار صالح قبل التحويل
+      service.setForegroundNotificationInfo(
+        title: 'مراقبة تلقائية',
+        content: 'جاري المراقبة...',
+      );
+      // انتظار قليل لضمان إعداد الإشعار
+      Future.delayed(const Duration(milliseconds: 100), () {
+        service.setAsForegroundService();
+      });
     });
 
     service.on('setAsBackground').listen((event) {
@@ -60,6 +75,15 @@ void onStart(ServiceInstance service) async {
   // بدء المراقبة
   service.on('startMonitoring').listen((event) async {
     isMonitoring = true;
+    
+    // إعداد الإشعار قبل البدء (مهم لـ Android 14+)
+    if (service is AndroidServiceInstance) {
+      service.setForegroundNotificationInfo(
+        title: 'مراقبة تلقائية',
+        content: 'جاري المراقبة...',
+      );
+    }
+    
     await saveData();
 
     // مؤقت للمدة

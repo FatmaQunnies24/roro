@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
@@ -5,9 +6,28 @@ import 'view/login_view.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  
+  // معالجة الأخطاء عند تهيئة Firebase
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (e) {
+    // في حالة فشل تهيئة Firebase، نستمر في تشغيل التطبيق
+    debugPrint('خطأ في تهيئة Firebase: $e');
+  }
+  
+  // معالجة الأخطاء العامة لمنع تعطل التطبيق
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    debugPrint('خطأ في Flutter: ${details.exception}');
+  };
+  
+  // معالجة الأخطاء غير المعالجة
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('خطأ غير معالج: $error');
+    return true;
+  };
   
   runApp(const MyApp());
 }
