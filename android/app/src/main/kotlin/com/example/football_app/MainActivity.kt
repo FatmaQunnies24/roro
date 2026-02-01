@@ -9,12 +9,15 @@ import android.app.ActivityManager
 import android.app.usage.UsageStatsManager
 import android.os.Build
 import android.content.pm.PackageManager
+import android.content.SharedPreferences
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "accessibility_helper"
+    private val PREFS_NAME = "FlutterSharedPreferences"
+    private val KEY_TAP_COUNT = "flutter.monitoring_tapCount"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -33,10 +36,24 @@ class MainActivity: FlutterActivity() {
                     val packageName = getCurrentAppPackage()
                     result.success(packageName)
                 }
+                "getTapCount" -> {
+                    val count = getTapCountFromPrefs()
+                    result.success(count)
+                }
                 else -> {
                     result.notImplemented()
                 }
             }
+        }
+    }
+
+    private fun getTapCountFromPrefs(): Int {
+        return try {
+            val prefs: SharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val v = prefs.getInt(KEY_TAP_COUNT, -1)
+            if (v >= 0) v else (prefs.getString(KEY_TAP_COUNT, "0")?.toIntOrNull() ?: 0)
+        } catch (e: Exception) {
+            0
         }
     }
 

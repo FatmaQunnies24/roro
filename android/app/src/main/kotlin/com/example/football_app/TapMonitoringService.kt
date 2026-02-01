@@ -1,6 +1,7 @@
 package com.example.football_app
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.view.accessibility.AccessibilityEvent
 import android.content.SharedPreferences
 import android.content.Context
@@ -10,39 +11,84 @@ class TapMonitoringService : AccessibilityService() {
     private val TAG = "TapMonitoringService"
     private val PREFS_NAME = "FlutterSharedPreferences"
     private val KEY_PERMISSION_REQUESTED = "flutter.accessibility_permission_requested"
-    
+    private val KEY_LAST_TAP_PACKAGE = "flutter.last_tap_package"
+    private val KEY_LAST_TAP_TIME = "flutter.last_tap_time"
+    private val MIN_TAP_INTERVAL_MS = 300L // تقليل العد المزدوج لأحداث التركيز
+    private val MIN_CONTENT_CHANGED_INTERVAL_MS = 1200L // تخفيف قوي لتغيّر المحتوى (ألعاب/واجهات مخصصة)
+
+    private fun handleTapFromOtherApp(packageName: String) {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val appPackageName = applicationContext.packageName
+        if (packageName != appPackageName) {
+            if (!prefs.getBoolean(KEY_PERMISSION_REQUESTED, false)) {
+                Log.d(TAG, "تم اكتشاف ضغطة في تطبيق آخر ($packageName) - طلب الإذن")
+                prefs.edit().putBoolean(KEY_PERMISSION_REQUESTED, true).apply()
+                requestAccessibilityPermission()
+            }
+        }
+        // تخفيف لأحداث TYPE_VIEW_FOCUSED: لا نعد إذا كانت آخر ضغطة من نفس التطبيق منذ أقل من MIN_TAP_INTERVAL_MS
+        val lastTimeStr = prefs.getString(KEY_LAST_TAP_TIME, "0") ?: "0"
+        val lastTime = lastTimeStr.toLongOrNull() ?: 0L
+        if (lastTime > 0 && (System.currentTimeMillis() - lastTime) < MIN_TAP_INTERVAL_MS) {
+            val lastPkg = prefs.getString(KEY_LAST_TAP_PACKAGE, "")
+            if (packageName == lastPkg) return
+        }
+        incrementTapCount(this, packageName)
+        prefs.edit()
+            .putString(KEY_LAST_TAP_PACKAGE, packageName)
+            .putString(KEY_LAST_TAP_TIME, System.currentTimeMillis().toString())
+            .apply()
+        Log.d(TAG, "ضغطة من $packageName - العدد: ${getTapCount(this)}")
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event?.let {
-            // عد الأحداث التي تشير إلى الضغطات في جميع التطبيقات
             when (it.eventType) {
                 AccessibilityEvent.TYPE_VIEW_CLICKED,
                 AccessibilityEvent.TYPE_VIEW_LONG_CLICKED,
                 AccessibilityEvent.TYPE_VIEW_SELECTED -> {
-                    val packageName = it.packageName?.toString() ?: "unknown"
-                    val appPackageName = applicationContext.packageName
-                    
-                    // التحقق من أن الضغطة في تطبيق آخر (ليس تطبيقنا)
-                    if (packageName != appPackageName && packageName != "unknown") {
-                        // التحقق من أننا لم نطلب الإذن من قبل
-                        val prefs: SharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                        val permissionRequested = prefs.getBoolean(KEY_PERMISSION_REQUESTED, false)
-                        
-                        if (!permissionRequested) {
-                            // طلب الإذن لأول مرة عند اكتشاف ضغطة في تطبيق آخر
+                    val packageName = it.packageName?.toString() ?: "other"
+                    val prefs: SharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    if (packageName != applicationContext.packageName) {
+                        if (!prefs.getBoolean(KEY_PERMISSION_REQUESTED, false)) {
                             Log.d(TAG, "تم اكتشاف ضغطة في تطبيق آخر ($packageName) - طلب الإذن")
                             prefs.edit().putBoolean(KEY_PERMISSION_REQUESTED, true).apply()
-                            
-                            // إرسال إشعار لطلب الإذن (سيتم التعامل معه في Flutter)
                             requestAccessibilityPermission()
                         }
-                        
-                        // زيادة عدد الضغطات (يعمل حتى في التطبيقات الأخرى)
-                        incrementTapCount(this, packageName)
-                        Log.d(TAG, "تم اكتشاف ضغطة في ${packageName} - العدد الجديد: ${getTapCount(this)}")
-                    } else {
-                        // تجاهل الضغطات داخل تطبيقنا
-                        Log.d(TAG, "تم تجاهل ضغطة داخل التطبيق ($packageName)")
                     }
+                    // عد كل الضغطات — داخل التطبيق وخارجه
+                    incrementTapCount(this, packageName)
+                    prefs.edit()
+                        .putString(KEY_LAST_TAP_PACKAGE, packageName)
+                        .putString(KEY_LAST_TAP_TIME, System.currentTimeMillis().toString())
+                        .apply()
+                    Log.d(TAG, "ضغطة من $packageName - العدد: ${getTapCount(this)}")
+                }
+                AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
+                    val packageName = it.packageName?.toString() ?: "other"
+                    handleTapFromOtherApp(packageName)
+                }
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                    // ألعاب/تطبيقات بواجهة مخصصة لا ترسل ضغط أو تركيز — نعد تغيّر المحتوى بتخفيف قوي (تقديري)
+                    val packageName = it.packageName?.toString() ?: "other"
+                    if (packageName == applicationContext.packageName) return@let
+                    val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    val lastTimeStr = prefs.getString(KEY_LAST_TAP_TIME, "0") ?: "0"
+                    val lastTime = lastTimeStr.toLongOrNull() ?: 0L
+                    if (lastTime > 0 && (System.currentTimeMillis() - lastTime) < MIN_CONTENT_CHANGED_INTERVAL_MS) {
+                        val lastPkg = prefs.getString(KEY_LAST_TAP_PACKAGE, "")
+                        if (packageName == lastPkg) return@let
+                    }
+                    if (!prefs.getBoolean(KEY_PERMISSION_REQUESTED, false)) {
+                        prefs.edit().putBoolean(KEY_PERMISSION_REQUESTED, true).apply()
+                        requestAccessibilityPermission()
+                    }
+                    incrementTapCount(this, packageName)
+                    prefs.edit()
+                        .putString(KEY_LAST_TAP_PACKAGE, packageName)
+                        .putString(KEY_LAST_TAP_TIME, System.currentTimeMillis().toString())
+                        .apply()
+                    Log.d(TAG, "تغيّر محتوى (تقديري) من $packageName - العدد: ${getTapCount(this)}")
                 }
                 AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                     // عند تغيير النافذة (فتح تطبيق جديد)
@@ -75,9 +121,28 @@ class TapMonitoringService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        // ضبط الخدمة لاستقبال الأحداث من كل التطبيقات (بدون تصفية حسب الحزمة)
+        try {
+            val info = serviceInfo ?: AccessibilityServiceInfo()
+            info.packageNames = null
+            info.eventTypes = AccessibilityEvent.TYPE_VIEW_CLICKED or
+                AccessibilityEvent.TYPE_VIEW_LONG_CLICKED or
+                AccessibilityEvent.TYPE_VIEW_SELECTED or
+                AccessibilityEvent.TYPE_VIEW_FOCUSED or
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+            info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+            val newFlags = info.flags or
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+            info.flags = newFlags
+            info.notificationTimeout = 100
+            setServiceInfo(info)
+        } catch (e: Exception) {
+            Log.e(TAG, "خطأ في ضبط خدمة إمكانية الوصول: ${e.message}")
+        }
         Log.d(TAG, "تم تفعيل خدمة المراقبة - جاهزة لعد الضغطات في جميع التطبيقات")
         
-        // إرسال إشعار أن الخدمة جاهزة
         val prefs: SharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putBoolean("flutter.accessibility_service_ready", true).apply()
     }
@@ -88,32 +153,21 @@ class TapMonitoringService : AccessibilityService() {
         
         fun incrementTapCount(context: Context, packageName: String = "unknown") {
             try {
-                // استخدام نفس SharedPreferences التي يستخدمها Flutter
+                // استخدام نفس SharedPreferences التي يستخدمها Flutter (المفتاح مع بادئة flutter.)
                 val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 
-                // محاولة قراءة القيمة كـ Int أولاً (Flutter يحفظ Int كـ Long)
+                // قراءة العدد الحالي - Flutter يحفظ بـ setInt('monitoring_tapCount') = flutter.monitoring_tapCount
                 val currentCount = try {
-                    // Flutter يحفظ Int كـ Long في SharedPreferences
-                    val longValue = prefs.getLong(KEY_TAP_COUNT, -1L)
-                    if (longValue >= 0) {
-                        longValue.toInt()
-                    } else {
-                        // إذا لم تكن موجودة كـ Long، جرب String
-                        val stringValue = prefs.getString(KEY_TAP_COUNT, "0")
-                        stringValue?.toIntOrNull() ?: 0
-                    }
+                    prefs.getInt(KEY_TAP_COUNT, -1).let { if (it >= 0) it else 0 }
                 } catch (e: Exception) {
-                    // إذا فشل، جرب String
                     try {
-                        val stringValue = prefs.getString(KEY_TAP_COUNT, "0")
-                        stringValue?.toIntOrNull() ?: 0
+                        prefs.getString(KEY_TAP_COUNT, "0")?.toIntOrNull() ?: 0
                     } catch (e2: Exception) {
                         0
                     }
                 }
                 
                 val newCount = currentCount + 1
-                // حفظ كـ Int (سيتم حفظه كـ Long تلقائياً)
                 prefs.edit().putInt(KEY_TAP_COUNT, newCount).apply()
                 Log.d("TapMonitoringService", "تم زيادة الضغطات: $newCount (من $packageName)")
             } catch (e: Exception) {
@@ -124,20 +178,11 @@ class TapMonitoringService : AccessibilityService() {
         fun getTapCount(context: Context): Int {
             val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             return try {
-                // محاولة قراءة القيمة كـ Int أولاً (Flutter يحفظ Int كـ Long)
-                val longValue = prefs.getLong(KEY_TAP_COUNT, -1L)
-                if (longValue >= 0) {
-                    longValue.toInt()
-                } else {
-                    // إذا لم تكن موجودة كـ Long، جرب String
-                    val stringValue = prefs.getString(KEY_TAP_COUNT, "0")
-                    stringValue?.toIntOrNull() ?: 0
-                }
+                val intValue = prefs.getInt(KEY_TAP_COUNT, -1)
+                if (intValue >= 0) intValue else (prefs.getString(KEY_TAP_COUNT, "0")?.toIntOrNull() ?: 0)
             } catch (e: Exception) {
-                // إذا فشل، جرب String
                 try {
-                    val stringValue = prefs.getString(KEY_TAP_COUNT, "0")
-                    stringValue?.toIntOrNull() ?: 0
+                    prefs.getString(KEY_TAP_COUNT, "0")?.toIntOrNull() ?: 0
                 } catch (e2: Exception) {
                     0
                 }

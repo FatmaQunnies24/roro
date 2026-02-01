@@ -33,5 +33,15 @@ class AccessibilityHelper {
       return null;
     }
   }
+
+  /// قراءة عدد الضغطات مباشرة من نفس الملف الذي تكتب فيه خدمة إمكانية الوصول (ضمان ظهور العدد الصحيح)
+  static Future<int> getTapCountFromNative() async {
+    try {
+      final result = await _channel.invokeMethod<int>('getTapCount');
+      return result ?? 0;
+    } catch (e) {
+      return 0;
+    }
+  }
 }
 

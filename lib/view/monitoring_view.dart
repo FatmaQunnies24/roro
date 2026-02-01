@@ -39,6 +39,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   Timer? _saveTimer;
   
   double _currentSoundLevel = 0.0;
+  String? _lastTapPackage;
+  String? _lastTapTime; // millis as string من خدمة إمكانية الوصول
 
   @override
   void initState() {
@@ -87,17 +89,9 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         });
       }
     } else if (state == AppLifecycleState.resumed) {
-      // التطبيق عاد للمقدمة - تحديث البيانات من Accessibility Service
-      _loadSavedData(); // استعادة البيانات
-      // تحديث دوري للبيانات من Accessibility Service
-      Timer.periodic(const Duration(seconds: 2), (timer) {
-        if (!_isMonitoring || !mounted) {
-          timer.cancel();
-          return;
-        }
-        _loadSavedData();
-      });
-      debugPrint('التطبيق عاد للمقدمة - تم استعادة البيانات');
+      // التطبيق عاد للمقدمة (مثلاً من اللعبة) - تحديث فوري لعدد الضغطات من خدمة إمكانية الوصول
+      _loadSavedData();
+      debugPrint('التطبيق عاد للمقدمة - تم استعادة عدد الضغطات من التطبيقات الأخرى');
     }
   }
 
@@ -105,18 +99,24 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   Future<void> _loadSavedData() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
       final savedTapCount = prefs.getInt('monitoring_tapCount') ?? 0;
+      // قراءة العدد مباشرة من نفس الملف الذي تكتب فيه خدمة إمكانية الوصول (ضمان ظهور العدد بعد الضغط في واتساب وغيره)
+      final nativeTapCount = await AccessibilityHelper.getTapCountFromNative();
+      final tapCountToUse = savedTapCount > nativeTapCount ? savedTapCount : nativeTapCount;
       final savedDuration = prefs.getInt('monitoring_duration') ?? 0;
       final savedScreamCount = prefs.getInt('monitoring_screamCount') ?? 0;
       final savedSoundLevels = prefs.getString('monitoring_soundLevels');
       final wasActive = prefs.getBool('monitoring_isActive') ?? false;
+      final lastTapPkg = prefs.getString('last_tap_package');
+      final lastTapTs = prefs.getString('last_tap_time');
       
-      // تحديث القيم فقط إذا كانت أكبر (لتجنب فقدان البيانات من Accessibility Service)
       if (mounted) {
         setState(() {
-          // استخدام القيمة الأكبر بين المحفوظة والحالية (لضمان عدم فقدان البيانات من Accessibility Service)
-          if (savedTapCount > _tapCount) {
-            _tapCount = savedTapCount;
+          _lastTapPackage = lastTapPkg;
+          _lastTapTime = lastTapTs;
+          if (tapCountToUse > _tapCount) {
+            _tapCount = tapCountToUse;
           }
           if (savedDuration > _monitoringDuration) {
             _monitoringDuration = savedDuration;
@@ -141,17 +141,26 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
           }
         });
       }
-      debugPrint('تم تحميل البيانات: taps=$savedTapCount, duration=$savedDuration, screams=$savedScreamCount');
+      debugPrint('تم تحميل البيانات: taps=$tapCountToUse (native=$nativeTapCount) duration=$savedDuration screams=$savedScreamCount');
     } catch (e) {
       debugPrint('خطأ في تحميل البيانات: $e');
     }
   }
 
-  // حفظ البيانات
+  // حفظ البيانات (لا نستبدل عدد الضغطات بقيمة أقل — نقرأ من Kotlin مباشرة)
   Future<void> _saveData() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt('monitoring_tapCount', _tapCount);
+      await prefs.reload();
+      final fromPrefs = prefs.getInt('monitoring_tapCount') ?? 0;
+      final fromNative = await AccessibilityHelper.getTapCountFromNative();
+      final tapToSave = _tapCount > fromPrefs && _tapCount > fromNative
+          ? _tapCount
+          : (fromNative > fromPrefs ? fromNative : fromPrefs);
+      if (tapToSave > _tapCount && mounted) {
+        setState(() => _tapCount = tapToSave);
+      }
+      await prefs.setInt('monitoring_tapCount', tapToSave);
       await prefs.setInt('monitoring_duration', _monitoringDuration);
       await prefs.setInt('monitoring_screamCount', _screamCount);
       await prefs.setString('monitoring_soundLevels', _soundLevels.map((e) => e.toString()).join(','));
@@ -397,19 +406,19 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       */
       debugPrint('الخدمة الخلفية معطلة مؤقتاً لتجنب مشكلة الإشعار');
 
-    // مؤقت لتحديث مدة المراقبة - يعمل حتى في الخلفية
+    // مؤقت: تحديث مدة المراقبة وقراءة عدد الضغطات مباشرة من Kotlin (ضمان ظهور العدد بعد الضغط في واتساب)
     _monitoringTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_isMonitoring) {
-        // تحديث المدة حتى لو كان التطبيق في الخلفية
         _monitoringDuration++;
-        _saveData(); // حفظ البيانات كل ثانية
-        
-        // تحديث البيانات من الخدمة الخلفية
-        _loadSavedData();
-        
-        if (mounted) {
-          setState(() {});
-        }
+        AccessibilityHelper.getTapCountFromNative().then((nativeCount) {
+          if (mounted && nativeCount > _tapCount) {
+            setState(() => _tapCount = nativeCount);
+          }
+        });
+        _loadSavedData().then((_) {
+          _saveData();
+          if (mounted) setState(() {});
+        });
       }
     });
 
@@ -420,17 +429,14 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       }
     });
 
-    // مؤقت لحفظ البيانات كل ثانيتين (لضمان عدم فقدان البيانات)
+    // مؤقت: تحميل أولاً من خدمة إمكانية الوصول ثم حفظ — حتى لا نستبدل العدد الذي كتبته الخدمة
     _saveTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
       if (_isMonitoring) {
-        _saveData();
-        // تحديث دوري من Accessibility Service (يعمل حتى في الخلفية)
-        _loadSavedData();
-        
-        // التحقق من حالة Accessibility Service بشكل دوري
+        _loadSavedData().then((_) {
+          _saveData();
+        });
         AccessibilityHelper.isAccessibilityServiceEnabled().then((isEnabled) {
           if (isEnabled && mounted) {
-            // إذا كان مفعلاً، نحدث الواجهة
             setState(() {});
           }
         });
@@ -657,6 +663,29 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
   }
 
+  /// تنسيق رسالة "آخر ضغطات من [package] منذ X"
+  String _formatLastTapFrom(String packageName, String? timeMillisStr) {
+    final name = packageName.length > 25 ? '${packageName.substring(0, 22)}...' : packageName;
+    if (timeMillisStr == null || timeMillisStr.isEmpty) {
+      return 'آخر ضغطات من تطبيق آخر: $name';
+    }
+    final millis = int.tryParse(timeMillisStr) ?? 0;
+    if (millis == 0) return 'آخر ضغطات من تطبيق آخر: $name';
+    final diff = DateTime.now().millisecondsSinceEpoch - millis;
+    final secs = diff ~/ 1000;
+    final mins = secs ~/ 60;
+    String ago;
+    if (secs < 60) {
+      ago = 'منذ $secs ثانية';
+    } else if (mins < 60) {
+      ago = 'منذ $mins دقيقة';
+    } else {
+      final hours = mins ~/ 60;
+      ago = 'منذ $hours ساعة';
+    }
+    return 'آخر ضغطات من تطبيق آخر: $name ($ago)';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -731,7 +760,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
                                 final isEnabled = snapshot.data ?? false;
                                 return Text(
                                   isEnabled 
-                                    ? '✓ خدمة إمكانية الوصول مفعّلة - الضغطات في التطبيقات الأخرى تُحسب'
+                                    ? '✓ خدمة إمكانية الوصول مفعّلة - عند الخروج من التطبيق والدخول لأي لعبة، تُحسب الضغطات فيها تلقائياً'
                                     : 'ملاحظة: الضغطات تُحسب فقط داخل التطبيق',
                                   style: TextStyle(
                                     fontSize: 12,
@@ -744,23 +773,49 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
                           ),
                         ],
                       ),
-                      const SizedBox(height: 4),
-                      FutureBuilder<bool>(
-                        future: AccessibilityHelper.isAccessibilityServiceEnabled(),
-                        builder: (context, snapshot) {
-                          final isEnabled = snapshot.data ?? false;
-                          if (isEnabled) {
-                            return const SizedBox.shrink();
-                          }
-                          return Text(
-                            'للضغطات في التطبيقات الأخرى: فعّل خدمة إمكانية الوصول من الإعدادات',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.orange[800],
-                            ),
-                          );
-                        },
+                      const SizedBox(height: 6),
+                      Text(
+                        'يُحسب العدد في كل التطبيقات والألعاب قدر الإمكان. في التطبيقات بأزرار عادية العد دقيق؛ في الألعاب والواجهات المخصصة العدد تقديري (قد يشمل حركة المحتوى أيضاً).',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.orange[800],
+                        ),
                       ),
+                      if (_lastTapPackage != null && _lastTapPackage!.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          _formatLastTapFrom(_lastTapPackage!, _lastTapTime),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.green[800],
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ] else ...[
+                        const SizedBox(height: 4),
+                        FutureBuilder<bool>(
+                          future: AccessibilityHelper.isAccessibilityServiceEnabled(),
+                          builder: (context, snapshot) {
+                            final isEnabled = snapshot.data ?? false;
+                            if (!isEnabled) {
+                              return Text(
+                                'للضغطات في التطبيقات الأخرى: فعّل خدمة إمكانية الوصول من الإعدادات',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.orange[800],
+                                ),
+                              );
+                            }
+                            return Text(
+                              'لم يُستقبل أي ضغطات من تطبيقات أخرى بعد — جرّب تطبيقاً أو لعبة بأزرار عادية (مثلاً ألعاب ألغاز، تطبيقات تواصل، أو أي تطبيق فيه قوائم وأزرار واضحة).',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.orange[800],
+                              ),
+                            );
+                          },
+                        ),
+                      ],
                     ],
                   ),
                 ),
