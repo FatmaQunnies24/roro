@@ -134,6 +134,16 @@ class AssessmentsListView extends StatelessWidget {
                                   color: Colors.grey[600],
                                 ),
                               ),
+                              if (isAutoMonitoring) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  'مدة: ${_formatDuration(assessment.monitoringDurationSeconds)} | ضغطات: ${assessment.tapCount} | صرخات: ${assessment.screamCount}',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.grey[500],
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         ),
@@ -169,6 +179,13 @@ class AssessmentsListView extends StatelessWidget {
 
   String _formatDate(DateTime date) {
     return '${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
+  }
+
+  String _formatDuration(int seconds) {
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    final secs = seconds % 60;
+    return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
   }
 }
 

@@ -246,6 +246,25 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     }
   }
 
+  /// تصفير كل شيء (المدة، الصرخات، الضغطات) بعد حفظ التقييم في الداتابيس — الجلسة القادمة تبدأ من صفر
+  Future<void> _clearMonitoringSessionData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('monitoring_tapCount', 0);
+      await prefs.setInt('monitoring_duration', 0);
+      await prefs.setInt('monitoring_screamCount', 0);
+      await prefs.remove('monitoring_soundLevels');
+      await prefs.setBool('monitoring_isActive', false);
+      await prefs.remove('monitoring_timeResetCounter');
+      await prefs.remove('monitoring_previousTimestamp');
+      await prefs.remove('last_tap_package');
+      await prefs.remove('last_tap_time');
+      debugPrint('تم تصفير كل شيء (المدة، الصرخات، الضغطات) — الجلسة القادمة تبدأ من صفر');
+    } catch (e) {
+      debugPrint('خطأ في تصفير بيانات المراقبة: $e');
+    }
+  }
+
   Future<void> _requestPermissions() async {
     try {
       debugPrint('بدء طلب الصلاحيات...');
@@ -516,21 +535,25 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       _hasStartedMonitoring = true;
       
       if (!mounted) return;
+
+      // كل مرة يضغط "بدء المراقبة" = جلسة جديدة من صفر (لا نكمل على آخر مراقبة)
+      await _clearMonitoringSessionData();
+      if (!mounted) return;
       
       setState(() {
-        _isMonitoring = true;
+        _tapCount = 0;
+        _lastKnownTapCount = 0;
+        _monitoringDuration = 0;
+        _screamCount = 0;
         _soundLevels = [];
+        _lastNativeTapCount = 0;
+        _previousTimestamp = 0;
+        _timeResetCounter = 0;
+        _hasTimeResetOccurred = false;
+        _lastTapPackage = null;
+        _lastTapTime = null;
+        _isMonitoring = true;
       });
-
-      // مزامنة عداد الضغطات من native (تطبيقات أخرى) عند بدء المراقبة
-      final initialNative = await AccessibilityHelper.getTapCountFromNative();
-      if (initialNative > _tapCount) {
-        if (mounted) setState(() {
-          _tapCount = initialNative;
-          _lastKnownTapCount = initialNative;
-        });
-      }
-      _lastNativeTapCount = initialNative;
 
       _saveData();
 
@@ -719,6 +742,9 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
 
     final assessmentService = AssessmentService();
     final assessmentId = await assessmentService.addAssessment(assessment);
+
+    // مسح بيانات جلسة المراقبة حتى تبدأ الجلسة القادمة من أول جديد
+    await _clearMonitoringSessionData();
 
     final savedAssessment = AssessmentModel(
       id: assessmentId,
