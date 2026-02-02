@@ -17,6 +17,8 @@ class AssessmentModel {
   final double averageSoundLevel; // متوسط مستوى الصوت (0-100)
   final int screamCount; // عدد الصرخات المكتشفة
   final int monitoringDurationSeconds; // مدة المراقبة بالثواني
+  final int badWordsCount; // عدد مرات الكلمات السيئة
+  final String badWordsReport; // تقرير الكلمات السيئة التي قيلت (للريبورت)
   
   // المخرجات
   final String predictedStressLevel; // منخفض / متوسط / مرتفع
@@ -35,6 +37,8 @@ class AssessmentModel {
     this.averageSoundLevel = 0.0,
     this.screamCount = 0,
     this.monitoringDurationSeconds = 0,
+    this.badWordsCount = 0,
+    this.badWordsReport = '',
     required this.predictedStressLevel,
     required this.stressScore,
   });
@@ -53,6 +57,8 @@ class AssessmentModel {
       averageSoundLevel: (data['averageSoundLevel'] ?? 0.0).toDouble(),
       screamCount: data['screamCount'] ?? 0,
       monitoringDurationSeconds: data['monitoringDurationSeconds'] ?? 0,
+      badWordsCount: data['badWordsCount'] ?? 0,
+      badWordsReport: data['badWordsReport'] ?? '',
       predictedStressLevel: data['predictedStressLevel'] ?? '',
       stressScore: (data['stressScore'] ?? 0.0).toDouble(),
     );
@@ -71,6 +77,8 @@ class AssessmentModel {
       'averageSoundLevel': averageSoundLevel,
       'screamCount': screamCount,
       'monitoringDurationSeconds': monitoringDurationSeconds,
+      'badWordsCount': badWordsCount,
+      'badWordsReport': badWordsReport,
       'predictedStressLevel': predictedStressLevel,
       'stressScore': stressScore,
     };

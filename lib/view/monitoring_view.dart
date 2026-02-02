@@ -4,7 +4,9 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:noise_meter/noise_meter.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 import '../service/assessment_service.dart';
+import '../utils/bad_words.dart';
 import '../model/assessment_model.dart';
 import '../utils/stress_calculator.dart';
 import '../utils/background_service.dart';
@@ -51,6 +53,15 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   int _previousTimestamp = 0;
   int _lastNativeTapCount = 0; // لتتبع آخر قيمة من Kotlin
   bool _hasTimeResetOccurred = false; // للكشف عن حدوث تصفير وقت
+
+  // الكلمات السيئة: كل كلمة → عدد مرات قيلت (طول فترة المراقبة، كل كلمة +1)
+  final Map<String, int> _badWordsCount = {};
+  SpeechToText? _speechToText;
+  bool _speechListening = false;
+  Timer? _speechRestartTimer;
+  String _lastCountedSpeechText = ''; // لتجنب عد نفس النص مرتين
+  String _lastRecognizedWords = ''; // آخر نص معرَف (للعرض على الشاشة)
+  String _speechStatus = ''; // حالة التعرف على الصوت
 
   @override
   void initState() {
@@ -558,6 +569,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         _lastTapTime = null;
         _isMonitoring = true;
       });
+      _badWordsCount.clear();
+      _lastCountedSpeechText = '';
 
       _saveData();
 
@@ -576,6 +589,11 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
 
       // قراءة مستوى الصوت الحقيقي من الميكروفون لاكتشاف الصرخات (بعد التأكد من الإذن)
       _startNoiseMeterIfPermitted();
+
+      // بدء التعرف على الصوت بعد تأخير لتفادي تعارض الميكروفون مع مقياس الضجيج
+      Future.delayed(const Duration(seconds: 2), () {
+        if (_isMonitoring && mounted) _startSpeechRecognition();
+      });
 
       // مؤقت للتحقق من تصفير الوقت
       _timeResetCheckTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
@@ -679,6 +697,97 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     _lastScreamTime = null;
   }
 
+  Future<void> _startSpeechRecognition() async {
+    try {
+      _stopNoiseMeter();
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (!_isMonitoring || !mounted) return;
+      _speechToText ??= SpeechToText();
+      String? localeToUse;
+      try {
+        final locales = await _speechToText!.locales();
+        for (final l in locales) {
+          if (l.localeId.startsWith('ar')) {
+            localeToUse = l.localeId;
+            break;
+          }
+        }
+        if (localeToUse == null) localeToUse = 'ar_SA';
+        debugPrint('لغة التعرف: $localeToUse');
+      } catch (_) {
+        localeToUse = 'ar_SA';
+      }
+      void doListen() {
+        if (!_isMonitoring || !mounted) return;
+        _speechToText!.stop();
+        _lastCountedSpeechText = '';
+        _speechToText!.listen(
+          onResult: (result) {
+            if (mounted) setState(() => _lastRecognizedWords = result.recognizedWords);
+            if (result.recognizedWords.isEmpty) return;
+            final text = result.recognizedWords.trim();
+            debugPrint('🎤 النص المعرَف: "$text" (نهائي: ${result.finalResult})');
+            final counts = countBadWordsInText(text);
+            if (counts.isNotEmpty) {
+              for (final e in counts.entries) {
+                _badWordsCount[e.key] = (_badWordsCount[e.key] ?? 0) + e.value;
+              }
+              if (mounted) setState(() {});
+              debugPrint('✅ كلمات سيئة مكتشفة: $counts');
+            }
+          },
+          listenFor: const Duration(seconds: 30),
+          pauseFor: const Duration(seconds: 8),
+          partialResults: true,
+          localeId: localeToUse,
+          cancelOnError: false,
+          listenMode: ListenMode.dictation,
+        );
+      }
+      final available = await _speechToText!.initialize(
+        onError: (e) {
+          debugPrint('خطأ التعرف على الصوت: $e');
+          if (mounted) setState(() => _speechStatus = 'خطأ: $e');
+        },
+        onStatus: (s) {
+          if (mounted) setState(() => _speechStatus = s);
+          if (s == 'done' || s == 'notListening' || s == 'doneListening') {
+            Future.delayed(const Duration(milliseconds: 300), () {
+              if (_isMonitoring && _speechListening && mounted) doListen();
+            });
+          }
+        },
+      );
+      if (!available || !mounted || !_isMonitoring) {
+        debugPrint('⚠️ التعرف على الصوت غير متوفر أو المراقبة متوقفة');
+        if (mounted) setState(() => _speechStatus = 'غير متوفر');
+        return;
+      }
+      _speechStatus = 'جاري البدء...';
+      if (mounted) setState(() {});
+      await Future.delayed(const Duration(milliseconds: 800));
+      if (!_isMonitoring || !mounted) return;
+      doListen();
+      _speechListening = true;
+      if (mounted) setState(() => _speechStatus = 'يستمع...');
+      _speechRestartTimer?.cancel();
+      _speechRestartTimer = Timer.periodic(const Duration(seconds: 25), (_) {
+        if (_isMonitoring && _speechListening && mounted) doListen();
+      });
+      debugPrint('بدء التعرف على الصوت — الصوت يضل فاتح (إعادة تشغيل تلقائي)');
+    } catch (e) {
+      debugPrint('خطأ بدء التعرف على الصوت: $e');
+      if (mounted) setState(() => _speechStatus = 'خطأ: $e');
+    }
+  }
+
+  void _stopSpeechRecognition() {
+    _speechRestartTimer?.cancel();
+    _speechRestartTimer = null;
+    _speechToText?.stop();
+    _speechListening = false;
+  }
+
   void _handleTap() async {
     if (_isMonitoring) {
       setState(() {
@@ -707,6 +816,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
 
     _monitoringTimer?.cancel();
     _stopNoiseMeter();
+    _stopSpeechRecognition();
     _saveTimer?.cancel();
     _timeResetCheckTimer?.cancel();
     
@@ -736,6 +846,9 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         ? 0.0
         : _soundLevels.reduce((a, b) => a + b) / _soundLevels.length;
 
+    final badWordsTotal = _badWordsCount.values.fold<int>(0, (a, b) => a + b);
+    final badWordsReportText = buildBadWordsReport(_badWordsCount);
+
     final playHours = _monitoringDuration / 3600.0;
     final currentHour = DateTime.now().hour;
     final playTime = (currentHour >= 18 || currentHour < 6) ? 'ليل' : 'نهار';
@@ -753,6 +866,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       averageSoundLevel: averageSound,
       screamCount: _screamCount,
       monitoringDurationSeconds: _monitoringDuration,
+      badWordsCount: badWordsTotal,
+      badWordsReport: badWordsReportText,
       predictedStressLevel: '',
       stressScore: 0.0,
     );
@@ -772,6 +887,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       averageSoundLevel: averageSound,
       screamCount: _screamCount,
       monitoringDurationSeconds: _monitoringDuration,
+      badWordsCount: badWordsTotal,
+      badWordsReport: badWordsReportText,
       predictedStressLevel: result['predictedStressLevel'] as String,
       stressScore: result['stressScore'] as double,
     );
@@ -795,6 +912,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       averageSoundLevel: assessment.averageSoundLevel,
       screamCount: assessment.screamCount,
       monitoringDurationSeconds: assessment.monitoringDurationSeconds,
+      badWordsCount: assessment.badWordsCount,
+      badWordsReport: assessment.badWordsReport,
       predictedStressLevel: assessment.predictedStressLevel,
       stressScore: assessment.stressScore,
     );
@@ -999,6 +1118,88 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
                 _buildStatCard('مستوى الصوت الحالي', '${_currentSoundLevel.toStringAsFixed(1)}%', Icons.volume_up),
                 const SizedBox(height: 16),
                 _buildStatCard('عدد الصرخات', _screamCount.toString(), Icons.warning),
+                const SizedBox(height: 16),
+                _buildStatCard(
+                  'عدد الكلمات السيئة التي قالها الطفل',
+                  _badWordsCount.values.fold<int>(0, (a, b) => a + b).toString(),
+                  Icons.block,
+                ),
+                if (_badWordsCount.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Card(
+                      color: Colors.red[50],
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'الكلمات السيئة التي قيلت:',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey[700],
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              buildBadWordsReport(_badWordsCount),
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.red[800],
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Card(
+                    color: Colors.grey[100],
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'حالة التعرف على الصوت: $_speechStatus',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey[700],
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _lastRecognizedWords.isEmpty
+                                ? 'آخر نص معرَف: (لم يُعرَف بعد — تكلم بوضوح)'
+                                : 'آخر نص معرَف: $_lastRecognizedWords',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[800],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'إذا النص يطلع بالإنجليزي فقط: جهازك يعرّف بالإنجليزي. للعربي: إعدادات الجهاز > اللغة > إضافة عربي. أو تكلم بالإنجليزي للكلمات السيئة.',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.orange[800],
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               ],
 
               const SizedBox(height: 32),

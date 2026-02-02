@@ -181,6 +181,71 @@ class AssessmentDetailsView extends StatelessWidget {
                 assessment.screamCount.toString(),
                 Icons.warning,
               ),
+              const SizedBox(height: 12),
+              _buildDetailCard(
+                'عدد الكلمات السيئة التي قالها الطفل',
+                assessment.badWordsCount.toString(),
+                Icons.block,
+              ),
+              if (assessment.badWordsCount > 0) ...[
+                const SizedBox(height: 12),
+                Card(
+                  elevation: 2,
+                  color: Colors.red[50],
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.block, color: Colors.red[700]),
+                            const SizedBox(width: 8),
+                            Text(
+                              'الكلمات السيئة التي قيلت (الطفل)',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey[700],
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          assessment.badWordsReport,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.red[800],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ] else ...[
+                const SizedBox(height: 12),
+                Card(
+                  elevation: 2,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        Icon(Icons.check_circle, color: Colors.green[700]),
+                        const SizedBox(width: 8),
+                        Text(
+                          'لم يُسجّل أيّة كلمات سيئة',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey[700],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ],
 
             const SizedBox(height: 32),

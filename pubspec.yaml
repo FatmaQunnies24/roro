@@ -41,6 +41,7 @@ dependencies:
   shared_preferences: ^2.3.2
   flutter_background_service: ^5.0.5
   noise_meter: ^4.0.1
+  speech_to_text: ^7.0.0
 
 dev_dependencies:
   flutter_test:
