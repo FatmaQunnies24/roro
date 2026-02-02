@@ -40,6 +40,7 @@ dependencies:
   path_provider: ^2.1.4
   shared_preferences: ^2.3.2
   flutter_background_service: ^5.0.5
+  noise_meter: ^4.0.1
 
 dev_dependencies:
   flutter_test:

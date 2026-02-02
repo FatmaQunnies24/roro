@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:noise_meter/noise_meter.dart';
 import '../service/assessment_service.dart';
 import '../model/assessment_model.dart';
 import '../utils/stress_calculator.dart';
@@ -37,9 +37,13 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   int _screamCount = 0;
   int _monitoringDuration = 0;
   Timer? _monitoringTimer;
-  Timer? _soundCheckTimer;
   Timer? _saveTimer;
   Timer? _timeResetCheckTimer;
+  
+  NoiseMeter? _noiseMeter;
+  StreamSubscription<NoiseReading>? _noiseSubscription;
+  DateTime? _lastScreamTime;
+  static const int _screamCooldownMs = 1200; // لا نعد صرخة جديدة قبل مرور هذه المدة (ms)
   
   double _currentSoundLevel = 0.0;
   String? _lastTapPackage;
@@ -66,7 +70,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _monitoringTimer?.cancel();
-    _soundCheckTimer?.cancel();
+    _stopNoiseMeter();
     _saveTimer?.cancel();
     _timeResetCheckTimer?.cancel();
     _saveData();
@@ -570,12 +574,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         }
       });
 
-      // مؤقت للتحقق من مستوى الصوت (محاكاة)
-      _soundCheckTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
-        if (_isMonitoring) {
-          _checkSoundLevel();
-        }
-      });
+      // قراءة مستوى الصوت الحقيقي من الميكروفون لاكتشاف الصرخات (بعد التأكد من الإذن)
+      _startNoiseMeterIfPermitted();
 
       // مؤقت للتحقق من تصفير الوقت
       _timeResetCheckTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
@@ -606,41 +606,77 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     }
   }
 
-  void _checkSoundLevel() {
+  Future<void> _startNoiseMeterIfPermitted() async {
     try {
-      final random = Random();
-      double soundLevel;
-      bool isScream = false;
-      
-      double screamProbability = 0.05;
-      if (_tapCount > 100) {
-        screamProbability = 0.15;
+      final granted = await Permission.microphone.isGranted;
+      if (!granted) {
+        debugPrint('إذن الميكروفون غير ممنوح — لا يمكن قياس الصوت أو عد الصرخات');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('لقياس الصوت وعد الصرخات: فعّل إذن الميكروفون من إعدادات التطبيق'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
+        return;
       }
-      if (_tapCount > 300) {
-        screamProbability = 0.25;
-      }
-      
-      if (random.nextDouble() < screamProbability) {
-        soundLevel = 75 + random.nextDouble() * 25;
-        isScream = true;
-      } else {
-        soundLevel = 10 + random.nextDouble() * 40;
-      }
-      
-      _currentSoundLevel = soundLevel;
-      _soundLevels.add(soundLevel);
-      
-      if (isScream && soundLevel > 75) {
-        _screamCount++;
-        _saveData();
-      }
-      
-      if (mounted) {
-        setState(() {});
-      }
+      _startNoiseMeter();
     } catch (e) {
-      debugPrint('خطأ في قراءة مستوى الصوت: $e');
+      debugPrint('خطأ في التحقق من إذن الميكروفون: $e');
+      _startNoiseMeter();
     }
+  }
+
+  void _startNoiseMeter() {
+    try {
+      _noiseMeter = NoiseMeter();
+      _lastScreamTime = null;
+      _noiseSubscription = _noiseMeter!.noise.listen(
+        (NoiseReading reading) {
+          if (!_isMonitoring) return;
+          final db = reading.meanDecibel;
+          final maxDb = reading.maxDecibel;
+          if (db.isNaN || db.isInfinite) return;
+          // عرض المستوى: صوت واطي = رقم واطي، صوت عالي = رقم عالي (من ~10 dB إلى ~80 dB)
+          const double minDbForDisplay = 10.0;
+          const double maxDbForDisplay = 80.0;
+          final level = ((db - minDbForDisplay) / (maxDbForDisplay - minDbForDisplay) * 100).clamp(0.0, 100.0);
+          _currentSoundLevel = level;
+          _soundLevels.add(level);
+          // لما مستوى الصوت يصل 100% نزيد الكاونت 1 (مع فترة تبريد)
+          final now = DateTime.now();
+          final cooldownPassed = _lastScreamTime == null ||
+              now.difference(_lastScreamTime!).inMilliseconds >= _screamCooldownMs;
+          if (level >= 99.0 && cooldownPassed) {
+            _lastScreamTime = now;
+            if (mounted) {
+              setState(() {
+                _screamCount++;
+              });
+              _saveData();
+            }
+            debugPrint('مستوى الصوت 100% — تم زيادة العداد');
+          }
+          if (mounted) setState(() {});
+        },
+        onError: (Object error) {
+          debugPrint('خطأ في قياس الصوت: $error');
+        },
+        cancelOnError: false,
+      );
+      debugPrint('بدء قياس الصوت — العداد يزيد عند وصول المستوى إلى 100%');
+    } catch (e) {
+      debugPrint('خطأ في بدء قياس الصوت: $e');
+    }
+  }
+
+  void _stopNoiseMeter() {
+    _noiseSubscription?.cancel();
+    _noiseSubscription = null;
+    _noiseMeter = null;
+    _lastScreamTime = null;
   }
 
   void _handleTap() async {
@@ -670,7 +706,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     });
 
     _monitoringTimer?.cancel();
-    _soundCheckTimer?.cancel();
+    _stopNoiseMeter();
     _saveTimer?.cancel();
     _timeResetCheckTimer?.cancel();
     
