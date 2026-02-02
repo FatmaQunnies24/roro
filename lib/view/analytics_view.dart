@@ -3,10 +3,49 @@ import '../service/assessment_service.dart';
 import '../model/assessment_model.dart';
 import 'assessment_details_view.dart';
 
-class AnalyticsView extends StatelessWidget {
+class AnalyticsView extends StatefulWidget {
   final String userId;
 
   const AnalyticsView({super.key, required this.userId});
+
+  @override
+  State<AnalyticsView> createState() => _AnalyticsViewState();
+}
+
+class _AnalyticsViewState extends State<AnalyticsView> {
+  List<AssessmentModel>? _assessments;
+  Object? _error;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAssessments();
+  }
+
+  Future<void> _loadAssessments() async {
+    if (!mounted) return;
+    setState(() {
+      _error = null;
+      _loading = true;
+    });
+    try {
+      final list = await AssessmentService().getUserAssessmentsOnce(widget.userId);
+      if (mounted) {
+        setState(() {
+          _assessments = list;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e;
+          _loading = false;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -14,72 +53,138 @@ class AnalyticsView extends StatelessWidget {
       appBar: AppBar(
         title: const Text('التحليل والتحسن'),
         backgroundColor: Colors.blue[700],
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loading ? null : _loadAssessments,
+            tooltip: 'تحديث',
+          ),
+        ],
       ),
-      body: StreamBuilder<List<AssessmentModel>>(
-        stream: AssessmentService().getUserAssessments(userId),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
+      body: _buildBody(context),
+    );
+  }
 
-          final allAssessments = snapshot.data ?? [];
-          
-          if (allAssessments.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.analytics_outlined, size: 80, color: Colors.grey[400]),
-                  const SizedBox(height: 16),
-                  Text(
-                    'لا توجد بيانات للتحليل',
-                    style: TextStyle(fontSize: 18, color: Colors.grey[600]),
-                  ),
-                ],
+  Widget _buildBody(BuildContext context) {
+    final allAssessments = _assessments ?? [];
+    final hasError = _error != null;
+    final hasData = allAssessments.isNotEmpty;
+
+    // إذا كان هناك خطأ ولا توجد بيانات سابقة — نعرض شاشة الخطأ فقط
+    if (hasError && !hasData) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.error_outline, size: 64, color: Colors.red[300]),
+              const SizedBox(height: 16),
+              Text(
+                'حدث خطأ في تحميل بيانات التحليل',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 16, color: Colors.grey[700]),
               ),
-            );
-          }
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _loadAssessments,
+                icon: const Icon(Icons.refresh),
+                label: const Text('إعادة المحاولة'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
-          final now = DateTime.now();
-          final weekAgo = now.subtract(const Duration(days: 7));
-          final monthAgo = now.subtract(const Duration(days: 30));
+    if (_loading && _assessments == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-          final weekAssessments = allAssessments.where((a) => a.timestamp.isAfter(weekAgo)).toList();
-          final monthAssessments = allAssessments.where((a) => a.timestamp.isAfter(monthAgo)).toList();
-          final last7Assessments = allAssessments.take(7).toList();
-
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // إحصائيات سريعة
-                _buildStatsCard(context, 'إجمالي التقييمات', allAssessments.length.toString(), Icons.assessment),
-                const SizedBox(height: 12),
-                _buildStatsCard(context, 'آخر أسبوع', weekAssessments.length.toString(), Icons.calendar_today),
-                const SizedBox(height: 12),
-                _buildStatsCard(context, 'آخر شهر', monthAssessments.length.toString(), Icons.date_range),
-                
-                const SizedBox(height: 24),
-                
-                // التحسن
-                _buildImprovementSection(context, last7Assessments),
-                
-                const SizedBox(height: 24),
-                
-                // التقييمات الأخيرة
-                _buildRecentAssessmentsSection(context, last7Assessments),
-                
-                const SizedBox(height: 24),
-                
-                // التنصائح
-                _buildRecommendationsSection(context, allAssessments, weekAssessments),
-              ],
+    if (allAssessments.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.analytics_outlined, size: 80, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text(
+              'لا توجد بيانات للتحليل',
+              style: TextStyle(fontSize: 18, color: Colors.grey[600]),
             ),
-          );
-        },
+            const SizedBox(height: 8),
+            Text(
+              'أضف تقييمات من المراقبة التلقائية أو التقييم اليدوي',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final now = DateTime.now();
+    final weekAgo = now.subtract(const Duration(days: 7));
+    final monthAgo = now.subtract(const Duration(days: 30));
+
+    final weekAssessments = allAssessments.where((a) => a.timestamp.isAfter(weekAgo)).toList();
+    final monthAssessments = allAssessments.where((a) => a.timestamp.isAfter(monthAgo)).toList();
+    final last7Assessments = allAssessments.take(7).toList();
+
+    final analyticsContent = SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildStatsCard(context, 'إجمالي التقييمات', allAssessments.length.toString(), Icons.assessment),
+          const SizedBox(height: 12),
+          _buildStatsCard(context, 'آخر أسبوع', weekAssessments.length.toString(), Icons.calendar_today),
+          const SizedBox(height: 12),
+          _buildStatsCard(context, 'آخر شهر', monthAssessments.length.toString(), Icons.date_range),
+          const SizedBox(height: 24),
+          _buildImprovementSection(context, last7Assessments),
+          const SizedBox(height: 24),
+          _buildRecentAssessmentsSection(context, last7Assessments),
+          const SizedBox(height: 24),
+          _buildRecommendationsSection(context, allAssessments, weekAssessments),
+        ],
       ),
     );
+
+    if (hasError && hasData) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Material(
+            color: Colors.orange[50],
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning_amber, color: Colors.orange[700], size: 24),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'حدث خطأ في التحديث. البيانات المعروضة سابقة.',
+                        style: TextStyle(color: Colors.orange[900], fontSize: 14),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _loading ? null : _loadAssessments,
+                      child: const Text('إعادة المحاولة'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Expanded(child: analyticsContent),
+        ],
+      );
+    }
+    return analyticsContent;
   }
 
   Widget _buildStatsCard(BuildContext context, String title, String value, IconData icon) {

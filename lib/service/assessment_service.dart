@@ -11,22 +11,50 @@ class AssessmentService {
     return docRef.id;
   }
 
-  /// جلب جميع تقييمات مستخدم معين
+  /// ترتيب التقييمات من الأحدث للأقدم (بدون فهرس مركب في Firestore)
+  static List<AssessmentModel> _sortByTimestampDesc(List<AssessmentModel> list) {
+    final copy = List<AssessmentModel>.from(list);
+    copy.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    return copy;
+  }
+
+  /// جلب جميع تقييمات مستخدم معين (Stream — بدون orderBy لتفادي طلب فهرس مركب)
   Stream<List<AssessmentModel>> getUserAssessments(String userId) {
     return _assessmentsRef
         .where('userId', isEqualTo: userId)
-        .orderBy('timestamp', descending: true)
         .snapshots()
-        .map(
-          (snapshot) => snapshot.docs
-              .map(
-                (doc) => AssessmentModel.fromMap(
-                  doc.id,
-                  doc.data(),
-                ),
-              )
-              .toList(),
-        );
+        .map((snapshot) {
+      final list = <AssessmentModel>[];
+      for (final doc in snapshot.docs) {
+        try {
+          final data = doc.data();
+          if (data.isEmpty) continue;
+          list.add(AssessmentModel.fromMap(doc.id, data));
+        } catch (_) {
+          continue;
+        }
+      }
+      return _sortByTimestampDesc(list);
+    });
+  }
+
+  /// جلب تقييمات المستخدم مرة واحدة (Future) — بدون orderBy لتفادي خطأ الفهرس
+  Future<List<AssessmentModel>> getUserAssessmentsOnce(String userId) async {
+    if (userId.isEmpty) return [];
+    final snapshot = await _assessmentsRef
+        .where('userId', isEqualTo: userId)
+        .get();
+    final list = <AssessmentModel>[];
+    for (final doc in snapshot.docs) {
+      try {
+        final data = doc.data();
+        if (data.isEmpty) continue;
+        list.add(AssessmentModel.fromMap(doc.id, data));
+      } catch (_) {
+        continue;
+      }
+    }
+    return _sortByTimestampDesc(list);
   }
 
   /// جلب تقييم معين

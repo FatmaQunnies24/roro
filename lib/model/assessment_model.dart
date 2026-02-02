@@ -48,24 +48,49 @@ class AssessmentModel {
   });
 
   factory AssessmentModel.fromMap(String id, Map<String, dynamic> data) {
+    DateTime timestamp = DateTime.now();
+    final t = data['timestamp'];
+    if (t != null && t is Timestamp) timestamp = t.toDate();
+
     return AssessmentModel(
       id: id,
-      userId: data['userId'] ?? '',
-      timestamp: (data['timestamp'] as Timestamp).toDate(),
-      playHoursPerDay: (data['playHoursPerDay'] ?? 0.0).toDouble(),
-      gameType: data['gameType'] ?? '',
-      playTime: data['playTime'] ?? '',
-      playMode: data['playMode'] ?? '',
-      stressLevel: (data['stressLevel'] ?? 0.0).toDouble(),
-      tapCount: data['tapCount'] ?? 0,
-      averageSoundLevel: (data['averageSoundLevel'] ?? 0.0).toDouble(),
-      screamCount: data['screamCount'] ?? 0,
-      monitoringDurationSeconds: data['monitoringDurationSeconds'] ?? 0,
-      badWordsCount: data['badWordsCount'] ?? 0,
-      badWordsReport: data['badWordsReport'] ?? '',
-      predictedStressLevel: data['predictedStressLevel'] ?? '',
-      stressScore: (data['stressScore'] ?? 0.0).toDouble(),
+      userId: _str(data['userId']),
+      timestamp: timestamp,
+      playHoursPerDay: _double(data['playHoursPerDay']),
+      gameType: _str(data['gameType']),
+      playTime: _str(data['playTime']),
+      playMode: _str(data['playMode']),
+      stressLevel: _double(data['stressLevel']),
+      tapCount: _int(data['tapCount']),
+      averageSoundLevel: _double(data['averageSoundLevel']),
+      screamCount: _int(data['screamCount']),
+      monitoringDurationSeconds: _int(data['monitoringDurationSeconds']),
+      badWordsCount: _int(data['badWordsCount']),
+      badWordsReport: _str(data['badWordsReport']),
+      predictedStressLevel: _str(data['predictedStressLevel']),
+      stressScore: _double(data['stressScore']),
+      reasons: _str(data['reasons']),
+      tips: _str(data['tips']),
     );
+  }
+
+  static String _str(dynamic v) {
+    if (v == null) return '';
+    return v.toString();
+  }
+
+  static int _int(dynamic v) {
+    if (v == null) return 0;
+    if (v is int) return v;
+    if (v is double) return v.toInt();
+    return int.tryParse(v.toString()) ?? 0;
+  }
+
+  static double _double(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is double) return v;
+    if (v is int) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0.0;
   }
 
   Map<String, dynamic> toMap() {
