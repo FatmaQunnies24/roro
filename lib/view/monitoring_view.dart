@@ -59,9 +59,9 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   SpeechToText? _speechToText;
   bool _speechListening = false;
   Timer? _speechRestartTimer;
-  Timer? _speechRestartAfterDoneTimer; // إعادة التشغيل بعد توقف التعرف (خلالها يعمل مقياس الصوت)
-  Timer? _alternateToSpeechTimer; // التبديل: مقياس الصوت → تعرف صوتي (كل ٥٠ ثا، أول مرة بعد ٣٠ ثا)
-  Timer? _alternateToNoiseTimer;  // التبديل: تعرف صوتي → مقياس الصوت (كل ٥٠ ثا، أول مرة بعد ٥٠ ثا)
+  Timer? _speechRestartAfterDoneTimer;
+  Timer? _alternateToSpeechTimer; // تناوب: مقياس الصوت → تعرف (كل ٥٠ ثا، أول مرة بعد ٣٠ ثا)
+  Timer? _alternateToNoiseTimer;   // تناوب: تعرف → مقياس الصوت (كل ٥٠ ثا، أول مرة بعد ٥٠ ثا)
   String _lastCountedSpeechText = ''; // لتجنب عد نفس النص مرتين
   String _lastRecognizedWords = ''; // آخر نص معرَف (للعرض على الشاشة)
   String _speechStatus = ''; // حالة التعرف على الصوت
@@ -590,10 +590,9 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         }
       });
 
-      // قراءة مستوى الصوت أولاً (مستوى الصوت + صرخات ≥95%) ثم التناوب مع التعرف على الكلام (كلمات سيئة)
+      // المايك واحد على الجهاز — نناوب: مقياس الصوت (مستوى + صرخات ≥99%) ثم تعرف (كلمات سيئة)
       _startNoiseMeterIfPermitted();
 
-      // تناوب: ٣٠ ثا مقياس صوت، ثم ٢٠ ثا تعرف صوتي، ثم ٣٠ ثا مقياس صوت... (مستوى الصوت يشتغل + كلمات سيئة مرة وحدة)
       _alternateToSpeechTimer?.cancel();
       _alternateToNoiseTimer?.cancel();
       _alternateToSpeechTimer = Timer(const Duration(seconds: 30), () {
@@ -693,7 +692,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
           final now = DateTime.now();
           final cooldownPassed = _lastScreamTime == null ||
               now.difference(_lastScreamTime!).inMilliseconds >= _screamCooldownMs;
-          if (level >= 95.0 && cooldownPassed) {
+          if (level >= 99.0 && cooldownPassed) {
             _lastScreamTime = now;
             if (mounted) {
               setState(() {
@@ -701,7 +700,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
               });
               _saveData();
             }
-            debugPrint('مستوى الصوت ≥95% — تم زيادة عداد الصرخات');
+            debugPrint('مستوى الصوت ≥99% — تم زيادة عداد الصرخات');
           }
           if (mounted) setState(() {});
         },
@@ -725,9 +724,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
 
   Future<void> _startSpeechRecognition() async {
     try {
-      // المايك واحد: التعرف الصوتي ومقياس الضجيج لا يشتغلان معاً — نوقف مقياس الصوت ليعمل التعرف
       _stopNoiseMeter();
-      await Future.delayed(const Duration(milliseconds: 500));
+      await Future.delayed(const Duration(milliseconds: 400));
       if (!_isMonitoring || !mounted) return;
       _speechToText ??= SpeechToText();
       String? localeToUse;
@@ -746,7 +744,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       }
       void doListen({bool fromRestart = false}) {
         if (!_isMonitoring || !mounted) return;
-        _stopNoiseMeter(); // قبل أي استماع نحرر المايك من مقياس الصوت
+        _stopNoiseMeter();
         if (!fromRestart) {
           _speechToText!.stop();
           _lastCountedSpeechText = '';
@@ -785,19 +783,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         onStatus: (s) {
           if (mounted) setState(() => _speechStatus = s);
           if (s == 'done' || s == 'notListening' || s == 'doneListening') {
-            if (!_isMonitoring || !_speechListening || !mounted) return;
-            _speechRestartAfterDoneTimer?.cancel();
-            // تأخير قصير حتى يحرر التعرف المايك ثم نشغّل مقياس الصوت لمدة ١٥ ثانية
-            Future.delayed(const Duration(milliseconds: 500), () {
-              if (!_isMonitoring || !_speechListening || !mounted) return;
-              _startNoiseMeter();
-              if (mounted) setState(() {});
-              debugPrint('🔊 مقياس الصوت (مستوى الصوت) يعمل لمدة ١٥ ثانية');
-              _speechRestartAfterDoneTimer = Timer(const Duration(seconds: 15), () {
-                _speechRestartAfterDoneTimer = null;
-                if (_isMonitoring && _speechListening && mounted) doListen(fromRestart: true);
-              });
-            });
+            if (_isMonitoring && _speechListening && mounted) doListen(fromRestart: true);
           }
         },
       );
