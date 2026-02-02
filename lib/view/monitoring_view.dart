@@ -27,20 +27,26 @@ class MonitoringView extends StatefulWidget {
 
 class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObserver {
   bool _isMonitoring = false;
-  bool _isInitializing = true; // لمنع الاستدعاء المزدوج
-  bool _hasStartedMonitoring = false; // للتأكد من عدم البدء مرتين
+  bool _isInitializing = true;
+  bool _hasStartedMonitoring = false;
   
   int _tapCount = 0;
+  int _lastKnownTapCount = 0;
+  int _timeResetCounter = 0;
   List<double> _soundLevels = [];
   int _screamCount = 0;
   int _monitoringDuration = 0;
   Timer? _monitoringTimer;
   Timer? _soundCheckTimer;
   Timer? _saveTimer;
+  Timer? _timeResetCheckTimer;
   
   double _currentSoundLevel = 0.0;
   String? _lastTapPackage;
-  String? _lastTapTime; // millis as string من خدمة إمكانية الوصول
+  String? _lastTapTime;
+  int _previousTimestamp = 0;
+  int _lastNativeTapCount = 0; // لتتبع آخر قيمة من Kotlin
+  bool _hasTimeResetOccurred = false; // للكشف عن حدوث تصفير وقت
 
   @override
   void initState() {
@@ -48,10 +54,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     debugPrint('=== initState: بدء تهيئة MonitoringView ===');
     WidgetsBinding.instance.addObserver(this);
     
-    // تحميل البيانات أولاً
     _loadSavedData();
     
-    // ثم طلب الصلاحيات بعد تأخير بسيط لضمان أن الـ context جاهز
     WidgetsBinding.instance.addPostFrameCallback((_) {
       debugPrint('=== PostFrameCallback: طلب الصلاحيات ===');
       _requestPermissions();
@@ -64,7 +68,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     _monitoringTimer?.cancel();
     _soundCheckTimer?.cancel();
     _saveTimer?.cancel();
-    _saveData(); // حفظ نهائي
+    _timeResetCheckTimer?.cancel();
+    _saveData();
     super.dispose();
   }
 
@@ -72,13 +77,10 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
-      // التطبيق في الخلفية - لكن المراقبة تستمر
-      _saveData(); // حفظ فوري عند الخروج
+      _saveData();
       debugPrint('التطبيق في الخلفية - المراقبة مستمرة');
       
-      // عند انتقال التطبيق للخلفية لأول مرة، نطلب الإذن
       if (_isMonitoring && !_hasRequestedPermissionForOtherApp) {
-        // انتظار قليل ثم التحقق من Accessibility Service
         Future.delayed(const Duration(milliseconds: 1000), () async {
           final isEnabled = await AccessibilityHelper.isAccessibilityServiceEnabled();
           if (!isEnabled && mounted) {
@@ -89,35 +91,93 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         });
       }
     } else if (state == AppLifecycleState.resumed) {
-      // التطبيق عاد للمقدمة (مثلاً من اللعبة) - تحديث فوري لعدد الضغطات من خدمة إمكانية الوصول
-      _loadSavedData();
-      debugPrint('التطبيق عاد للمقدمة - تم استعادة عدد الضغطات من التطبيقات الأخرى');
+      // عندما يعود التطبيق للمقدمة، نفحص تصفير الوقت ثم نزامن عداد الضغطات من التطبيقات الأخرى (مثل واتساب)
+      _checkForTimeResetAndUpdateTaps();
+      _updateTapCountWithResetHandling().then((_) {
+        _saveData(); // حفظ العدد المحدث بعد مزامنة ضغطات واتساب/غيره
+      });
+      debugPrint('التطبيق عاد للمقدمة - التحقق من تصفير الوقت وتحديث الضغطات');
     }
   }
 
-  // تحميل البيانات المحفوظة
+  // دالة جديدة للتحقق من تصفير الوقت وتحديث العداد
+  Future<void> _checkForTimeResetAndUpdateTaps() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      
+      // الحصول على آخر timestamp
+      final lastTapTs = prefs.getString('last_tap_time');
+      final currentTimestamp = int.tryParse(lastTapTs ?? '0') ?? 0;
+      
+      // إذا كان الـ timestamp الحالي أصغر من السابق، حدث تصفير وقت
+      if (_previousTimestamp > 0 && currentTimestamp > 0 && currentTimestamp < _previousTimestamp) {
+        debugPrint('🔄 اكتشاف تصفير الوقت عند عودة التطبيق!');
+        _hasTimeResetOccurred = true;
+        
+        // الحصول على العدد الحالي من Kotlin
+        final nativeTapCount = await AccessibilityHelper.getTapCountFromNative();
+        
+        // إضافة العدد الجديد إلى العدد السابق
+        setState(() {
+          _tapCount += nativeTapCount;
+          _lastKnownTapCount = _tapCount;
+          _timeResetCounter++;
+        });
+        
+        await _saveData();
+      }
+      
+      // تحديث الـ timestamp
+      if (currentTimestamp > 0) {
+        _previousTimestamp = currentTimestamp;
+      }
+    } catch (e) {
+      debugPrint('خطأ في التحقق من تصفير الوقت عند العودة: $e');
+    }
+  }
+
   Future<void> _loadSavedData() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
       final savedTapCount = prefs.getInt('monitoring_tapCount') ?? 0;
-      // قراءة العدد مباشرة من نفس الملف الذي تكتب فيه خدمة إمكانية الوصول (ضمان ظهور العدد بعد الضغط في واتساب وغيره)
       final nativeTapCount = await AccessibilityHelper.getTapCountFromNative();
-      final tapCountToUse = savedTapCount > nativeTapCount ? savedTapCount : nativeTapCount;
+      
+      // منطق جديد: نأخذ القيمة الأكبر، ولكن إذا كان هناك تصفير وقت نعاملها بشكل مختلف
+      int tapCountToUse = savedTapCount;
+      
+      // إذا كانت قيمة Kotlin أكبر، نأخذها
+      if (nativeTapCount > tapCountToUse) {
+        tapCountToUse = nativeTapCount;
+      }
+      
+      // إذا كانت قيمة المحفوظة أكبر، نأخذها (حالة استمرارية)
+      if (savedTapCount > tapCountToUse) {
+        tapCountToUse = savedTapCount;
+      }
+      
       final savedDuration = prefs.getInt('monitoring_duration') ?? 0;
       final savedScreamCount = prefs.getInt('monitoring_screamCount') ?? 0;
       final savedSoundLevels = prefs.getString('monitoring_soundLevels');
       final wasActive = prefs.getBool('monitoring_isActive') ?? false;
       final lastTapPkg = prefs.getString('last_tap_package');
       final lastTapTs = prefs.getString('last_tap_time');
+      final savedTimeResetCounter = prefs.getInt('monitoring_timeResetCounter') ?? 0;
+      final savedPreviousTimestamp = prefs.getInt('monitoring_previousTimestamp') ?? 0;
       
       if (mounted) {
         setState(() {
           _lastTapPackage = lastTapPkg;
           _lastTapTime = lastTapTs;
+          _timeResetCounter = savedTimeResetCounter;
+          _previousTimestamp = savedPreviousTimestamp;
+          
           if (tapCountToUse > _tapCount) {
             _tapCount = tapCountToUse;
+            _lastKnownTapCount = tapCountToUse;
           }
+          _lastNativeTapCount = tapCountToUse; // تهيئة حتى لا يُحسب الفرق مرتين عند التحديث
           if (savedDuration > _monitoringDuration) {
             _monitoringDuration = savedDuration;
           }
@@ -130,9 +190,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
               _soundLevels = newLevels;
             }
           }
-          // إذا كانت المراقبة نشطة، نستمر (لكن فقط بعد انتهاء التهيئة)
           if (wasActive && !_isMonitoring && !_isInitializing && !_hasStartedMonitoring) {
-            // سنبدأ المراقبة بعد انتهاء التهيئة
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted && !_hasStartedMonitoring) {
                 _startMonitoring();
@@ -141,31 +199,48 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
           }
         });
       }
-      debugPrint('تم تحميل البيانات: taps=$tapCountToUse (native=$nativeTapCount) duration=$savedDuration screams=$savedScreamCount');
+      debugPrint('تم تحميل البيانات: taps=$tapCountToUse (native=$nativeTapCount) duration=$savedDuration timeResets=$savedTimeResetCounter');
     } catch (e) {
       debugPrint('خطأ في تحميل البيانات: $e');
     }
   }
 
-  // حفظ البيانات (لا نستبدل عدد الضغطات بقيمة أقل — نقرأ من Kotlin مباشرة)
   Future<void> _saveData() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
-      final fromPrefs = prefs.getInt('monitoring_tapCount') ?? 0;
-      final fromNative = await AccessibilityHelper.getTapCountFromNative();
-      final tapToSave = _tapCount > fromPrefs && _tapCount > fromNative
-          ? _tapCount
-          : (fromNative > fromPrefs ? fromNative : fromPrefs);
-      if (tapToSave > _tapCount && mounted) {
-        setState(() => _tapCount = tapToSave);
+      
+      // الحصول على القيمة الحالية من Kotlin
+      final nativeTapCount = await AccessibilityHelper.getTapCountFromNative();
+      
+      // منطق الحفظ الجديد:
+      // 1. نأخذ القيمة الأكبر بين القيمة الحالية في الذاكرة وnative
+      // 2. ولكن إذا حدث تصفير وقت، نتعامل معها بشكل مختلف
+      
+      int tapToSave = _tapCount;
+      
+      // إذا كانت قيمة native أكبر من القيمة الحالية، قد تكون ضغطات جديدة
+      if (nativeTapCount > tapToSave) {
+        // التحقق: هل حدث تصفير وقت؟
+        if (!_hasTimeResetOccurred && nativeTapCount - _lastNativeTapCount > 0) {
+          // لا يوجد تصفير وقت وهناك ضغطات جديدة
+          tapToSave = nativeTapCount;
+        }
       }
+      
+      // حفظ القيمة النهائية
       await prefs.setInt('monitoring_tapCount', tapToSave);
       await prefs.setInt('monitoring_duration', _monitoringDuration);
       await prefs.setInt('monitoring_screamCount', _screamCount);
       await prefs.setString('monitoring_soundLevels', _soundLevels.map((e) => e.toString()).join(','));
       await prefs.setBool('monitoring_isActive', _isMonitoring);
-      debugPrint('تم حفظ البيانات: taps=$_tapCount, duration=$_monitoringDuration, screams=$_screamCount');
+      await prefs.setInt('monitoring_timeResetCounter', _timeResetCounter);
+      await prefs.setInt('monitoring_previousTimestamp', _previousTimestamp);
+      
+      // تحديث آخر قيمة native عرفناها
+      _lastNativeTapCount = nativeTapCount;
+      
+      debugPrint('تم حفظ البيانات: taps=$tapToSave, native=$nativeTapCount, duration=$_monitoringDuration, timeResets=$_timeResetCounter');
     } catch (e) {
       debugPrint('خطأ في حفظ البيانات: $e');
     }
@@ -175,7 +250,6 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     try {
       debugPrint('بدء طلب الصلاحيات...');
       
-      // طلب إذن الميكروفون (للمستقبل عند إضافة قراءة فعلية للصوت)
       try {
         final microphoneStatus = await Permission.microphone.status;
         debugPrint('حالة إذن الميكروفون: $microphoneStatus');
@@ -199,23 +273,15 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         debugPrint('خطأ في طلب إذن الميكروفون: $e');
       }
       
-      // لا نطلب إذن Accessibility Service تلقائياً عند فتح الشاشة
-      // سيتم التحقق منه فقط عند اكتشاف ضغطة في تطبيق آخر
       debugPrint('تخطي طلب إذن Accessibility Service - سيتم طلبه عند اكتشاف ضغطة في تطبيق آخر');
       
-      // تهيئة الخدمة الخلفية - معطلة مؤقتاً لتجنب مشكلة الإشعار
-      // await _initializeBackgroundService();
-      
-      // انتظار قليل
       await Future.delayed(const Duration(milliseconds: 500));
       
-      // إنهاء مرحلة التهيئة
       if (mounted) {
         setState(() {
           _isInitializing = false;
         });
         
-        // بدء المراقبة حتى بدون إذن (سنستخدم محاكاة)
         if (!_hasStartedMonitoring) {
           debugPrint('بدء المراقبة...');
           _startMonitoring();
@@ -224,7 +290,6 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     } catch (e, stackTrace) {
       debugPrint('خطأ في طلب الأذونات: $e');
       debugPrint('Stack trace: $stackTrace');
-      // لا نوقف التطبيق، فقط نطبع الخطأ
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -240,7 +305,6 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   bool _hasRequestedPermissionForOtherApp = false;
 
   void _checkAccessibilityPeriodically() {
-    // التحقق من حالة Accessibility Service بشكل دوري
     Timer.periodic(const Duration(seconds: 2), (timer) {
       if (!_isMonitoring || !mounted) {
         timer.cancel();
@@ -253,19 +317,15 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
 
   Future<void> _checkAndRequestAccessibilityIfNeeded() async {
     try {
-      // التحقق من flag الذي يحدده TapMonitoringService
       final prefs = await SharedPreferences.getInstance();
       final shouldRequest = prefs.getBool('should_request_accessibility') ?? false;
       
       if (shouldRequest) {
-        // إزالة الـ flag
         await prefs.setBool('should_request_accessibility', false);
         
-        // التحقق من حالة Accessibility Service
         final isEnabled = await AccessibilityHelper.isAccessibilityServiceEnabled();
         
         if (!isEnabled && mounted) {
-          // عرض نافذة طلب الإذن
           debugPrint('تم اكتشاف ضغطة في تطبيق آخر - طلب إذن Accessibility');
           _showAccessibilityDialog();
         }
@@ -321,7 +381,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         androidConfiguration: AndroidConfiguration(
           onStart: onStart,
           autoStart: false,
-          isForegroundMode: false, // نبدأ كـ background ثم نحولها لاحقاً
+          isForegroundMode: false,
           notificationChannelId: 'monitoring_channel',
           initialNotificationTitle: 'مراقبة تلقائية',
           initialNotificationContent: 'جاري المراقبة...',
@@ -335,7 +395,6 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       );
     } catch (e) {
       debugPrint('خطأ في تهيئة الخدمة الخلفية: $e');
-      // لا نوقف التطبيق، فقط نطبع الخطأ
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -348,8 +407,106 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     }
   }
 
+  // دالة محسنة للتحقق من تصفير الوقت
+  void _checkTimeReset() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      final lastTapTs = prefs.getString('last_tap_time');
+      
+      if (lastTapTs != null && lastTapTs.isNotEmpty) {
+        final currentTimestamp = int.tryParse(lastTapTs) ?? 0;
+        
+        debugPrint('🔍 فحص التصفير: previousTimestamp=$_previousTimestamp, currentTimestamp=$currentTimestamp');
+        
+        // إذا كان الـ timestamp الحالي أصغر من السابق، حدث تصفير وقت
+        if (_previousTimestamp > 0 && currentTimestamp > 0 && currentTimestamp < _previousTimestamp) {
+          debugPrint('🔄 تم اكتشاف تصفير الوقت! القديم: $_previousTimestamp، الجديد: $currentTimestamp');
+          
+          // تسجيل أن تصفير الوقت حدث
+          _hasTimeResetOccurred = true;
+          
+          // الحصول على العدد الحالي من Kotlin (بعد التصفير)
+          final nativeTapCount = await AccessibilityHelper.getTapCountFromNative();
+          
+          // زيادة العداد - نضيف العدد الجديد إلى العدد السابق
+          final newTapCount = _tapCount + nativeTapCount;
+          
+          setState(() {
+            _tapCount = newTapCount;
+            _timeResetCounter++;
+            _lastKnownTapCount = newTapCount;
+          });
+          
+          // حفظ البيانات المحدثة
+          await _saveData();
+          
+          debugPrint('✅ تم تحديث العداد بعد التصفير: $_tapCount (أضيف $nativeTapCount)');
+        }
+        
+        // تحديث الـ timestamp
+        if (currentTimestamp > 0) {
+          _previousTimestamp = currentTimestamp;
+          await prefs.setInt('monitoring_previousTimestamp', _previousTimestamp);
+        }
+      }
+    } catch (e) {
+      debugPrint('خطأ في التحقق من تصفير الوقت: $e');
+    }
+  }
+
+  // دالة جديدة: تحديث العداد مع التعامل مع تصفير الوقت
+  Future<void> _updateTapCountWithResetHandling() async {
+    try {
+      final nativeTapCount = await AccessibilityHelper.getTapCountFromNative();
+      
+      // التحقق من تصفير الوقت أولاً
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      final lastTapTs = prefs.getString('last_tap_time');
+      final currentTimestamp = int.tryParse(lastTapTs ?? '0') ?? 0;
+      
+      // إذا حدث تصفير وقت (timestamp جديد أصغر من السابق)
+      if (_previousTimestamp > 0 && currentTimestamp > 0 && currentTimestamp < _previousTimestamp) {
+        debugPrint('⚡ حدث تصفير وقت أثناء التحديث!');
+        _hasTimeResetOccurred = true;
+        
+        // نضيف العدد الجديد إلى العدد الحالي
+        final newTotal = _tapCount + nativeTapCount;
+        
+        if (mounted) {
+          setState(() {
+            _tapCount = newTotal;
+            _lastKnownTapCount = newTotal;
+            _timeResetCounter++;
+          });
+        }
+        
+        _previousTimestamp = currentTimestamp;
+      } 
+      // إذا لم يحدث تصفير وقت وكانت هناك ضغطات جديدة
+      else if (nativeTapCount > _lastNativeTapCount) {
+        final difference = nativeTapCount - _lastNativeTapCount;
+        debugPrint('➕ اكتشاف $difference ضغطة جديدة من تطبيقات أخرى');
+        
+        if (mounted) {
+          setState(() {
+            _tapCount += difference;
+            _lastKnownTapCount = _tapCount;
+          });
+        }
+      }
+      
+      // تحديث آخر قيمة native
+      _lastNativeTapCount = nativeTapCount;
+      _previousTimestamp = currentTimestamp;
+      
+    } catch (e) {
+      debugPrint('خطأ في تحديث عداد الضغطات: $e');
+    }
+  }
+
   void _startMonitoring() async {
-    // منع الاستدعاء المزدوج
     if (_hasStartedMonitoring || _isMonitoring) {
       debugPrint('المراقبة جارية بالفعل أو تم البدء مسبقاً');
       return;
@@ -365,94 +522,52 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         _soundLevels = [];
       });
 
-      // حفظ حالة المراقبة
+      // مزامنة عداد الضغطات من native (تطبيقات أخرى) عند بدء المراقبة
+      final initialNative = await AccessibilityHelper.getTapCountFromNative();
+      if (initialNative > _tapCount) {
+        if (mounted) setState(() {
+          _tapCount = initialNative;
+          _lastKnownTapCount = initialNative;
+        });
+      }
+      _lastNativeTapCount = initialNative;
+
       _saveData();
 
-      // بدء الخدمة الخلفية - مؤقتاً معطل لتجنب مشكلة الإشعار
-      // TODO: إعادة تفعيل الخدمة الخلفية بعد إصلاح مشكلة الإشعار
-      /*
-      try {
-        final service = FlutterBackgroundService();
-        
-        // التحقق من أن الخدمة متاحة قبل الاستدعاء
-        final isRunning = await service.isRunning();
-        if (isRunning) {
-          // انتظار قليل قبل استدعاء الأوامر
-          await Future.delayed(const Duration(milliseconds: 500));
+      // مؤقت: تحديث مدة المراقبة
+      _monitoringTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (_isMonitoring) {
+          _monitoringDuration++;
           
-          // بدء المراقبة أولاً
-          try {
-            service.invoke('startMonitoring');
-          } catch (e) {
-            debugPrint('خطأ في startMonitoring: $e');
-          }
+          // تحديث عداد الضغطات مع التعامل مع تصفير الوقت
+          _updateTapCountWithResetHandling();
           
-          // انتظار قليل لضمان إعداد الإشعار
-          await Future.delayed(const Duration(milliseconds: 300));
-          
-          // ثم تحويل الخدمة إلى foreground
-          try {
-            service.invoke('setAsForeground');
-          } catch (e) {
-            debugPrint('خطأ في setAsForeground: $e');
-          }
-        } else {
-          debugPrint('الخدمة الخلفية غير متاحة');
-        }
-      } catch (e) {
-        debugPrint('خطأ في بدء الخدمة الخلفية: $e');
-        // نستمر في المراقبة حتى لو فشلت الخدمة الخلفية
-      }
-      */
-      debugPrint('الخدمة الخلفية معطلة مؤقتاً لتجنب مشكلة الإشعار');
-
-    // مؤقت: تحديث مدة المراقبة وقراءة عدد الضغطات مباشرة من Kotlin (ضمان ظهور العدد بعد الضغط في واتساب)
-    _monitoringTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_isMonitoring) {
-        _monitoringDuration++;
-        AccessibilityHelper.getTapCountFromNative().then((nativeCount) {
-          if (mounted && nativeCount > _tapCount) {
-            setState(() => _tapCount = nativeCount);
-          }
-        });
-        _loadSavedData().then((_) {
           _saveData();
           if (mounted) setState(() {});
-        });
-      }
-    });
+        }
+      });
 
-    // مؤقت للتحقق من مستوى الصوت (محاكاة) - يعمل حتى في الخلفية
-    _soundCheckTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
-      if (_isMonitoring) {
-        _checkSoundLevel(); // يعمل حتى في الخلفية
-      }
-    });
+      // مؤقت للتحقق من مستوى الصوت (محاكاة)
+      _soundCheckTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
+        if (_isMonitoring) {
+          _checkSoundLevel();
+        }
+      });
 
-    // مؤقت: تحميل أولاً من خدمة إمكانية الوصول ثم حفظ — حتى لا نستبدل العدد الذي كتبته الخدمة
-    _saveTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
-      if (_isMonitoring) {
-        _loadSavedData().then((_) {
-          _saveData();
-        });
-        AccessibilityHelper.isAccessibilityServiceEnabled().then((isEnabled) {
-          if (isEnabled && mounted) {
-            setState(() {});
-          }
-        });
-      }
-    });
+      // مؤقت للتحقق من تصفير الوقت
+      _timeResetCheckTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
+        if (_isMonitoring) {
+          _checkTimeReset();
+        }
+      });
 
-    // التحقق من حالة Accessibility Service بشكل دوري عند بدء المراقبة
-    _checkAccessibilityPeriodically();
+      _checkAccessibilityPeriodically();
     } catch (e, stackTrace) {
       debugPrint('خطأ في بدء المراقبة: $e');
       debugPrint('Stack trace: $stackTrace');
       
-      // إعادة تعيين الـ flags في حالة الخطأ
       _hasStartedMonitoring = false;
       
-      // في حالة الخطأ، نعيد الحالة إلى الوضع الطبيعي
       if (mounted) {
         setState(() {
           _isMonitoring = false;
@@ -470,40 +585,31 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
 
   void _checkSoundLevel() {
     try {
-      // محاكاة قراءة مستوى الصوت
-      // في الإنتاج، يمكن استخدام مكتبة لقراءة مستوى الصوت الفعلي من الميكروفون
       final random = Random();
-      // محاكاة مستويات صوت واقعية
       double soundLevel;
       bool isScream = false;
       
-      // زيادة احتمالية الصرخات عند زيادة الضغطات (مؤشر على التوتر)
-      double screamProbability = 0.05; // 5% أساسي
+      double screamProbability = 0.05;
       if (_tapCount > 100) {
-        screamProbability = 0.15; // 15% عند كثرة الضغطات
+        screamProbability = 0.15;
       }
       if (_tapCount > 300) {
-        screamProbability = 0.25; // 25% عند كثرة الضغطات جداً
+        screamProbability = 0.25;
       }
       
-      // فقط إذا كانت هناك صرخة فعلية
       if (random.nextDouble() < screamProbability) {
-        // صرخة - مستوى صوت عالي جداً
-        soundLevel = 75 + random.nextDouble() * 25; // 75-100
+        soundLevel = 75 + random.nextDouble() * 25;
         isScream = true;
       } else {
-        // صوت طبيعي - مستوى منخفض
-        soundLevel = 10 + random.nextDouble() * 40; // 10-50
+        soundLevel = 10 + random.nextDouble() * 40;
       }
       
-      // تحديث البيانات حتى لو كان التطبيق في الخلفية
       _currentSoundLevel = soundLevel;
       _soundLevels.add(soundLevel);
       
-      // فقط عند الصراخ الفعلي (soundLevel > 75) نزيد العدد
       if (isScream && soundLevel > 75) {
         _screamCount++;
-        _saveData(); // حفظ فوري عند اكتشاف صرخة
+        _saveData();
       }
       
       if (mounted) {
@@ -519,10 +625,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       setState(() {
         _tapCount++;
       });
-      // حفظ فوري عند كل ضغطة
       _saveData();
       
-      // إرسال للخدمة الخلفية
       try {
         final service = FlutterBackgroundService();
         final isRunning = await service.isRunning();
@@ -531,13 +635,12 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         }
       } catch (e) {
         debugPrint('خطأ في إرسال incrementTap: $e');
-        // نستمر حتى لو فشل الإرسال
       }
     }
   }
 
   Future<void> _stopMonitoring() async {
-    _hasStartedMonitoring = false; // إعادة تعيين الـ flag
+    _hasStartedMonitoring = false;
     
     setState(() {
       _isMonitoring = false;
@@ -546,8 +649,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     _monitoringTimer?.cancel();
     _soundCheckTimer?.cancel();
     _saveTimer?.cancel();
+    _timeResetCheckTimer?.cancel();
     
-    // إيقاف الخدمة الخلفية
     try {
       final service = FlutterBackgroundService();
       final isRunning = await service.isRunning();
@@ -567,34 +670,26 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       debugPrint('خطأ في إيقاف الخدمة الخلفية: $e');
     }
     
-    // تحميل البيانات النهائية من الخدمة الخلفية
     await _loadSavedData();
-    
-    // حفظ نهائي قبل المتابعة
     await _saveData();
 
-    // حساب متوسط مستوى الصوت
     final averageSound = _soundLevels.isEmpty
         ? 0.0
         : _soundLevels.reduce((a, b) => a + b) / _soundLevels.length;
 
-    // حساب عدد ساعات اللعب من مدة المراقبة
     final playHours = _monitoringDuration / 3600.0;
-
-    // تحديد وقت اللعب (ليل/نهار) من الساعة الحالية
     final currentHour = DateTime.now().hour;
     final playTime = (currentHour >= 18 || currentHour < 6) ? 'ليل' : 'نهار';
 
-    // إنشاء تقييم مؤقت
     final tempAssessment = AssessmentModel(
       id: '',
       userId: widget.userId,
       timestamp: DateTime.now(),
       playHoursPerDay: playHours,
-      gameType: 'تنافسية', // افتراضي
+      gameType: 'تنافسية',
       playTime: playTime,
-      playMode: widget.playMode, // من الإعدادات
-      stressLevel: 5.0, // افتراضي
+      playMode: widget.playMode,
+      stressLevel: 5.0,
       tapCount: _tapCount,
       averageSoundLevel: averageSound,
       screamCount: _screamCount,
@@ -603,17 +698,15 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       stressScore: 0.0,
     );
 
-    // حساب مستوى التوتر
     final result = StressCalculator.calculateStress(tempAssessment);
 
-    // إنشاء التقييم النهائي
     final assessment = AssessmentModel(
       id: '',
       userId: widget.userId,
       timestamp: DateTime.now(),
       playHoursPerDay: playHours,
       gameType: tempAssessment.gameType,
-      playTime: playTime, // تم تعريفه أعلاه
+      playTime: playTime,
       playMode: widget.playMode,
       stressLevel: tempAssessment.stressLevel,
       tapCount: _tapCount,
@@ -624,11 +717,9 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       stressScore: result['stressScore'] as double,
     );
 
-    // حفظ التقييم
     final assessmentService = AssessmentService();
     final assessmentId = await assessmentService.addAssessment(assessment);
 
-    // تحديث التقييم بالمعرف
     final savedAssessment = AssessmentModel(
       id: assessmentId,
       userId: assessment.userId,
@@ -663,14 +754,15 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
   }
 
-  /// تنسيق رسالة "آخر ضغطات من [package] منذ X"
   String _formatLastTapFrom(String packageName, String? timeMillisStr) {
     final name = packageName.length > 25 ? '${packageName.substring(0, 22)}...' : packageName;
+    
     if (timeMillisStr == null || timeMillisStr.isEmpty) {
       return 'آخر ضغطات من تطبيق آخر: $name';
     }
     final millis = int.tryParse(timeMillisStr) ?? 0;
     if (millis == 0) return 'آخر ضغطات من تطبيق آخر: $name';
+    
     final diff = DateTime.now().millisecondsSinceEpoch - millis;
     final secs = diff ~/ 1000;
     final mins = secs ~/ 60;
@@ -706,7 +798,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
                 padding: const EdgeInsets.all(24),
                 margin: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: _isMonitoring ? Colors.green.withValues(alpha: 0.1) : Colors.grey[200],
+                  color: _isMonitoring ? Colors.green.withOpacity(0.1) : Colors.grey[200],
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(
                     color: _isMonitoring ? Colors.green : Colors.grey,
@@ -807,13 +899,31 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
                               );
                             }
                             return Text(
-                              'لم يُستقبل أي ضغطات من تطبيقات أخرى بعد — جرّب تطبيقاً أو لعبة بأزرار عادية (مثلاً ألعاب ألغاز، تطبيقات تواصل، أو أي تطبيق فيه قوائم وأزرار واضحة).',
+                              'لم يُستقبل أي ضغطات من تطبيقات أخرى بعد — جرّب تطبيقاً أو لعبة بأزرار عادية',
                               style: TextStyle(
                                 fontSize: 11,
                                 color: Colors.orange[800],
                               ),
                             );
                           },
+                        ),
+                      ],
+                      // عرض حالة تصفير الوقت إذا حدث
+                      if (_hasTimeResetOccurred) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Icon(Icons.autorenew, color: Colors.blue[700], size: 16),
+                            const SizedBox(width: 4),
+                            Text(
+                              'تم اكتشاف تصفير الوقت وإضافة الضغطات الجديدة إلى المجموع',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.blue[800],
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ],
@@ -823,6 +933,9 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
                 _buildStatCard('مدة المراقبة', _formatDuration(_monitoringDuration), Icons.timer),
                 const SizedBox(height: 16),
                 _buildStatCard('عدد الضغطات', _tapCount.toString(), Icons.touch_app),
+                const SizedBox(height: 16),
+                _buildStatCard('عدد مرات التصفير', _timeResetCounter.toString(), Icons.restore, 
+                  subtitle: 'عدد مرات تصفير عداد وقت آخر ضغطة'),
                 const SizedBox(height: 16),
                 _buildStatCard('مستوى الصوت الحالي', '${_currentSoundLevel.toStringAsFixed(1)}%', Icons.volume_up),
                 const SizedBox(height: 16),
@@ -859,7 +972,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     );
   }
 
-  Widget _buildStatCard(String label, String value, IconData icon) {
+  Widget _buildStatCard(String label, String value, IconData icon, {String? subtitle}) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -869,7 +982,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.grey.withValues(alpha: 0.2),
+            color: Colors.grey.withOpacity(0.2),
             spreadRadius: 1,
             blurRadius: 4,
             offset: const Offset(0, 2),
@@ -891,6 +1004,17 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
                     color: Colors.grey[600],
                   ),
                 ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey[500],
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 4),
                 Text(
                   value,
@@ -908,4 +1032,3 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     );
   }
 }
-
