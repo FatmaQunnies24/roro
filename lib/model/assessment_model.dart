@@ -23,6 +23,8 @@ class AssessmentModel {
   // المخرجات
   final String predictedStressLevel; // منخفض / متوسط / مرتفع
   final double stressScore; // قيمة رقمية (0-100)
+  final String reasons; // أسباب محتملة (من StressCalculator)
+  final String tips; // نصائح (من StressCalculator)
   
   AssessmentModel({
     required this.id,
@@ -41,6 +43,8 @@ class AssessmentModel {
     this.badWordsReport = '',
     required this.predictedStressLevel,
     required this.stressScore,
+    this.reasons = '',
+    this.tips = '',
   });
 
   factory AssessmentModel.fromMap(String id, Map<String, dynamic> data) {
@@ -81,6 +85,8 @@ class AssessmentModel {
       'badWordsReport': badWordsReport,
       'predictedStressLevel': predictedStressLevel,
       'stressScore': stressScore,
+      'reasons': reasons,
+      'tips': tips,
     };
   }
 }

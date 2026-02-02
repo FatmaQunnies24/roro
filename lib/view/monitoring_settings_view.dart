@@ -12,6 +12,7 @@ class MonitoringSettingsView extends StatefulWidget {
 
 class _MonitoringSettingsViewState extends State<MonitoringSettingsView> {
   String _playMode = 'فردي';
+  String _monitoringFocus = 'screams'; // 'screams' = عدد الصرخات، 'badWords' = عدد الكلمات السيئة
 
   @override
   Widget build(BuildContext context) {
@@ -51,6 +52,37 @@ class _MonitoringSettingsViewState extends State<MonitoringSettingsView> {
               },
             ),
 
+            const SizedBox(height: 24),
+            const Text(
+              'ماذا تريد مراقبته؟',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            RadioListTile<String>(
+              title: const Text('عدد الصرخات فقط (مستوى الصوت فوق 99%)'),
+              subtitle: const Text('المايك يقيس مستوى الصوت وعدّ الصرخات'),
+              value: 'screams',
+              groupValue: _monitoringFocus,
+              onChanged: (value) => setState(() => _monitoringFocus = value!),
+            ),
+            RadioListTile<String>(
+              title: const Text('عدد الكلمات السيئة فقط'),
+              subtitle: const Text('المايك يضل فاتح ويستمع للكلام فقط'),
+              value: 'badWords',
+              groupValue: _monitoringFocus,
+              onChanged: (value) => setState(() => _monitoringFocus = value!),
+            ),
+            RadioListTile<String>(
+              title: const Text('صراخ + كلمات سيئة'),
+              subtitle: const Text('يتناوب بين قياس الصوت (صرخات) والكلام (كلمات سيئة)'),
+              value: 'both',
+              groupValue: _monitoringFocus,
+              onChanged: (value) => setState(() => _monitoringFocus = value!),
+            ),
+
             const SizedBox(height: 40),
 
             // زر البدء
@@ -64,6 +96,7 @@ class _MonitoringSettingsViewState extends State<MonitoringSettingsView> {
                       builder: (_) => MonitoringView(
                         userId: widget.userId,
                         playMode: _playMode,
+                        monitoringFocus: _monitoringFocus,
                       ),
                     ),
                   );

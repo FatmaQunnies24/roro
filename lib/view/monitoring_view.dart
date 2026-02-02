@@ -16,11 +16,14 @@ import 'assessment_details_view.dart';
 class MonitoringView extends StatefulWidget {
   final String userId;
   final String playMode;
+  /// 'screams' = عدد الصرخات فقط (مقياس صوت)، 'badWords' = عدد الكلمات السيئة فقط (مايك فاتح)
+  final String monitoringFocus;
 
   const MonitoringView({
     super.key,
     required this.userId,
     this.playMode = 'فردي',
+    this.monitoringFocus = 'screams',
   });
 
   @override
@@ -84,7 +87,10 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _monitoringTimer?.cancel();
+    _alternateToSpeechTimer?.cancel();
+    _alternateToNoiseTimer?.cancel();
     _stopNoiseMeter();
+    _stopSpeechRecognition();
     _saveTimer?.cancel();
     _timeResetCheckTimer?.cancel();
     _saveData();
@@ -590,35 +596,48 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         }
       });
 
-      // المايك واحد على الجهاز — نناوب: مقياس الصوت (مستوى + صرخات ≥99%) ثم تعرف (كلمات سيئة)
-      _startNoiseMeterIfPermitted();
-
-      _alternateToSpeechTimer?.cancel();
-      _alternateToNoiseTimer?.cancel();
-      _alternateToSpeechTimer = Timer(const Duration(seconds: 30), () {
-        if (!_isMonitoring || !mounted) return;
-        _stopNoiseMeter();
-        _startSpeechRecognition();
-        _alternateToSpeechTimer = Timer.periodic(const Duration(seconds: 50), (_) {
-          if (_isMonitoring && mounted) {
-            _stopNoiseMeter();
-            _startSpeechRecognition();
-          }
+      // حسب الاختيار: صرخات فقط، كلمات سيئة فقط، أو صراخ + كلمات سيئة (تناوب)
+      if (widget.monitoringFocus == 'badWords') {
+        // كلمات سيئة فقط — المايك يضل فاتح طول فترة المراقبة
+        Future.delayed(const Duration(seconds: 2), () {
+          if (_isMonitoring && mounted) _startSpeechRecognition();
         });
-      });
-      _alternateToNoiseTimer = Timer(const Duration(seconds: 50), () {
-        if (!_isMonitoring || !mounted) return;
-        _stopSpeechRecognition();
-        _startNoiseMeter();
-        if (mounted) setState(() {});
-        _alternateToNoiseTimer = Timer.periodic(const Duration(seconds: 50), (_) {
-          if (_isMonitoring && mounted) {
-            _stopSpeechRecognition();
-            _startNoiseMeter();
-            if (mounted) setState(() {});
-          }
+      } else if (widget.monitoringFocus == 'both') {
+        // صراخ + كلمات سيئة — تناوب: ١٥ ثا مقياس صوت (صرخات ≥99%)، ثم ٥٠ ثا تعرف (كلمات سيئة)
+        _startNoiseMeterIfPermitted();
+        const int noiseWindowSec = 15;
+        const int speechWindowSec = 50;
+        const int cycleSec = noiseWindowSec + speechWindowSec;
+        _alternateToSpeechTimer?.cancel();
+        _alternateToNoiseTimer?.cancel();
+        _alternateToSpeechTimer = Timer(const Duration(seconds: noiseWindowSec), () {
+          if (!_isMonitoring || !mounted) return;
+          _stopNoiseMeter();
+          _startSpeechRecognition();
+          _alternateToSpeechTimer = Timer.periodic(const Duration(seconds: cycleSec), (_) {
+            if (_isMonitoring && mounted) {
+              _stopNoiseMeter();
+              _startSpeechRecognition();
+            }
+          });
         });
-      });
+        _alternateToNoiseTimer = Timer(const Duration(seconds: cycleSec), () {
+          if (!_isMonitoring || !mounted) return;
+          _stopSpeechRecognition();
+          _startNoiseMeter();
+          if (mounted) setState(() {});
+          _alternateToNoiseTimer = Timer.periodic(const Duration(seconds: cycleSec), (_) {
+            if (_isMonitoring && mounted) {
+              _stopSpeechRecognition();
+              _startNoiseMeter();
+              if (mounted) setState(() {});
+            }
+          });
+        });
+      } else {
+        // صرخات فقط — مقياس الصوت طول الوقت (مستوى الصوت + صرخات ≥99%)
+        _startNoiseMeterIfPermitted();
+      }
 
       // مؤقت للتحقق من تصفير الوقت
       _timeResetCheckTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
@@ -766,9 +785,9 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
               debugPrint('✅ كلمات سيئة مكتشفة: $counts');
             }
           },
-          listenFor: const Duration(minutes: 5),
-          // مدة الصمت قبل إيقاف الاستماع: دقيقتان حتى لا يطفي المايك لما تسكت
-          pauseFor: const Duration(minutes: 2),
+          listenFor: const Duration(minutes: 10),
+          // مدة الصمت قبل إيقاف الاستماع: ٥ دقائق حتى المايك يضل فاتح لما تسكت شوي
+          pauseFor: const Duration(minutes: 5),
           partialResults: true,
           localeId: localeToUse,
           cancelOnError: false,
@@ -783,7 +802,10 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         onStatus: (s) {
           if (mounted) setState(() => _speechStatus = s);
           if (s == 'done' || s == 'notListening' || s == 'doneListening') {
-            if (_isMonitoring && _speechListening && mounted) doListen(fromRestart: true);
+            // إعادة فتح المايك فوراً في الـ microtask التالي حتى يضل فاتح
+            scheduleMicrotask(() {
+              if (_isMonitoring && _speechListening && mounted) doListen(fromRestart: true);
+            });
           }
         },
       );
@@ -908,6 +930,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     );
 
     final result = StressCalculator.calculateStress(tempAssessment);
+    final reasons = result['reasons'] as String? ?? '';
+    final tips = result['tips'] as String? ?? '';
 
     final assessment = AssessmentModel(
       id: '',
@@ -926,6 +950,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       badWordsReport: badWordsReportText,
       predictedStressLevel: result['predictedStressLevel'] as String,
       stressScore: result['stressScore'] as double,
+      reasons: reasons,
+      tips: tips,
     );
 
     final assessmentService = AssessmentService();
@@ -951,6 +977,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       badWordsReport: assessment.badWordsReport,
       predictedStressLevel: assessment.predictedStressLevel,
       stressScore: assessment.stressScore,
+      reasons: assessment.reasons,
+      tips: assessment.tips,
     );
 
     if (mounted) {
@@ -1150,16 +1178,30 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
                 const SizedBox(height: 16),
                 _buildStatCard('عدد الضغطات', _tapCount.toString(), Icons.touch_app),
                 const SizedBox(height: 16),
-                _buildStatCard('مستوى الصوت الحالي', '${_currentSoundLevel.toStringAsFixed(1)}%', Icons.volume_up),
-                const SizedBox(height: 16),
-                _buildStatCard('عدد الصرخات', _screamCount.toString(), Icons.warning),
-                const SizedBox(height: 16),
-                _buildStatCard(
-                  'عدد الكلمات السيئة التي قالها الطفل',
-                  _badWordsCount.values.fold<int>(0, (a, b) => a + b).toString(),
-                  Icons.block,
-                ),
-                if (_badWordsCount.isNotEmpty) ...[
+                // حسب الاختيار: صرخات فقط، كلمات سيئة فقط، أو الاثنين (صراخ + كلمات سيئة)
+                if (widget.monitoringFocus == 'screams') ...[
+                  _buildStatCard('مستوى الصوت الحالي', '${_currentSoundLevel.toStringAsFixed(1)}%', Icons.volume_up),
+                  const SizedBox(height: 16),
+                  _buildStatCard('عدد الصرخات', _screamCount.toString(), Icons.warning),
+                ] else if (widget.monitoringFocus == 'badWords') ...[
+                  _buildStatCard(
+                    'عدد الكلمات السيئة التي قالها الطفل',
+                    _badWordsCount.values.fold<int>(0, (a, b) => a + b).toString(),
+                    Icons.block,
+                  ),
+                ] else ...[
+                  // both: صراخ + كلمات سيئة
+                  _buildStatCard('مستوى الصوت الحالي', '${_currentSoundLevel.toStringAsFixed(1)}%', Icons.volume_up),
+                  const SizedBox(height: 16),
+                  _buildStatCard('عدد الصرخات', _screamCount.toString(), Icons.warning),
+                  const SizedBox(height: 16),
+                  _buildStatCard(
+                    'عدد الكلمات السيئة التي قالها الطفل',
+                    _badWordsCount.values.fold<int>(0, (a, b) => a + b).toString(),
+                    Icons.block,
+                  ),
+                ],
+                if ((widget.monitoringFocus == 'badWords' || widget.monitoringFocus == 'both') && _badWordsCount.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1193,48 +1235,50 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
                     ),
                   ),
                 ],
-                const SizedBox(height: 12),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Card(
-                    color: Colors.grey[100],
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'حالة التعرف على الصوت: $_speechStatus',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.grey[700],
+                if (widget.monitoringFocus == 'badWords' || widget.monitoringFocus == 'both') ...[
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Card(
+                      color: Colors.grey[100],
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'حالة التعرف على الصوت: $_speechStatus',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey[700],
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _lastRecognizedWords.isEmpty
-                                ? 'آخر نص معرَف: (لم يُعرَف بعد — تكلم بوضوح)'
-                                : 'آخر نص معرَف: $_lastRecognizedWords',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.grey[800],
-                              fontWeight: FontWeight.w500,
+                            const SizedBox(height: 4),
+                            Text(
+                              _lastRecognizedWords.isEmpty
+                                  ? 'آخر نص معرَف: (لم يُعرَف بعد — تكلم بوضوح)'
+                                  : 'آخر نص معرَف: $_lastRecognizedWords',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey[800],
+                                fontWeight: FontWeight.w500,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'إذا النص يطلع بالإنجليزي فقط: جهازك يعرّف بالإنجليزي. للعربي: إعدادات الجهاز > اللغة > إضافة عربي. أو تكلم بالإنجليزي للكلمات السيئة.',
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: Colors.orange[800],
-                              fontStyle: FontStyle.italic,
+                            const SizedBox(height: 6),
+                            Text(
+                              'إذا النص يطلع بالإنجليزي فقط: جهازك يعرّف بالإنجليزي. للعربي: إعدادات الجهاز > اللغة > إضافة عربي.',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.orange[800],
+                                fontStyle: FontStyle.italic,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
+                ],
               ],
 
               const SizedBox(height: 32),

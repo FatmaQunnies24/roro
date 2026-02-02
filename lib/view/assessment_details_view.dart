@@ -99,7 +99,25 @@ class AssessmentDetailsView extends StatelessWidget {
               ),
             ),
 
-            const SizedBox(height: 32),
+            if (assessment.reasons.isNotEmpty || assessment.tips.isNotEmpty) ...[
+              const SizedBox(height: 20),
+              if (assessment.reasons.isNotEmpty)
+                _buildReasonsTipsCard(
+                  'أسباب محتملة (هل التوتر عالي أو عصبي؟)',
+                  assessment.reasons,
+                  Icons.psychology,
+                  Colors.orange,
+                ),
+              if (assessment.reasons.isNotEmpty && assessment.tips.isNotEmpty) const SizedBox(height: 12),
+              if (assessment.tips.isNotEmpty)
+                _buildReasonsTipsCard(
+                  'نصائح',
+                  assessment.tips,
+                  Icons.lightbulb_outline,
+                  Colors.green,
+                ),
+              const SizedBox(height: 24),
+            ],
 
             // تفاصيل التقييم
             const Text(
@@ -335,6 +353,46 @@ class AssessmentDetailsView extends StatelessWidget {
             fontSize: 18,
             fontWeight: FontWeight.bold,
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReasonsTipsCard(String title, String text, IconData icon, MaterialColor color) {
+    return Card(
+      elevation: 2,
+      color: color.withAlpha(25),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, color: color[700]),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: color[800],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              text,
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey[800],
+                height: 1.4,
+              ),
+            ),
+          ],
         ),
       ),
     );
