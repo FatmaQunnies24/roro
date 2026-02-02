@@ -59,6 +59,9 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   SpeechToText? _speechToText;
   bool _speechListening = false;
   Timer? _speechRestartTimer;
+  Timer? _speechRestartAfterDoneTimer; // إعادة التشغيل بعد توقف التعرف (خلالها يعمل مقياس الصوت)
+  Timer? _alternateToSpeechTimer; // التبديل: مقياس الصوت → تعرف صوتي (كل ٥٠ ثا، أول مرة بعد ٣٠ ثا)
+  Timer? _alternateToNoiseTimer;  // التبديل: تعرف صوتي → مقياس الصوت (كل ٥٠ ثا، أول مرة بعد ٥٠ ثا)
   String _lastCountedSpeechText = ''; // لتجنب عد نفس النص مرتين
   String _lastRecognizedWords = ''; // آخر نص معرَف (للعرض على الشاشة)
   String _speechStatus = ''; // حالة التعرف على الصوت
@@ -587,12 +590,35 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         }
       });
 
-      // قراءة مستوى الصوت الحقيقي من الميكروفون لاكتشاف الصرخات (بعد التأكد من الإذن)
+      // قراءة مستوى الصوت أولاً (مستوى الصوت + صرخات ≥95%) ثم التناوب مع التعرف على الكلام (كلمات سيئة)
       _startNoiseMeterIfPermitted();
 
-      // بدء التعرف على الصوت بعد تأخير لتفادي تعارض الميكروفون مع مقياس الضجيج
-      Future.delayed(const Duration(seconds: 2), () {
-        if (_isMonitoring && mounted) _startSpeechRecognition();
+      // تناوب: ٣٠ ثا مقياس صوت، ثم ٢٠ ثا تعرف صوتي، ثم ٣٠ ثا مقياس صوت... (مستوى الصوت يشتغل + كلمات سيئة مرة وحدة)
+      _alternateToSpeechTimer?.cancel();
+      _alternateToNoiseTimer?.cancel();
+      _alternateToSpeechTimer = Timer(const Duration(seconds: 30), () {
+        if (!_isMonitoring || !mounted) return;
+        _stopNoiseMeter();
+        _startSpeechRecognition();
+        _alternateToSpeechTimer = Timer.periodic(const Duration(seconds: 50), (_) {
+          if (_isMonitoring && mounted) {
+            _stopNoiseMeter();
+            _startSpeechRecognition();
+          }
+        });
+      });
+      _alternateToNoiseTimer = Timer(const Duration(seconds: 50), () {
+        if (!_isMonitoring || !mounted) return;
+        _stopSpeechRecognition();
+        _startNoiseMeter();
+        if (mounted) setState(() {});
+        _alternateToNoiseTimer = Timer.periodic(const Duration(seconds: 50), (_) {
+          if (_isMonitoring && mounted) {
+            _stopSpeechRecognition();
+            _startNoiseMeter();
+            if (mounted) setState(() {});
+          }
+        });
       });
 
       // مؤقت للتحقق من تصفير الوقت
@@ -667,7 +693,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
           final now = DateTime.now();
           final cooldownPassed = _lastScreamTime == null ||
               now.difference(_lastScreamTime!).inMilliseconds >= _screamCooldownMs;
-          if (level >= 99.0 && cooldownPassed) {
+          if (level >= 95.0 && cooldownPassed) {
             _lastScreamTime = now;
             if (mounted) {
               setState(() {
@@ -675,7 +701,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
               });
               _saveData();
             }
-            debugPrint('مستوى الصوت 100% — تم زيادة العداد');
+            debugPrint('مستوى الصوت ≥95% — تم زيادة عداد الصرخات');
           }
           if (mounted) setState(() {});
         },
@@ -699,6 +725,7 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
 
   Future<void> _startSpeechRecognition() async {
     try {
+      // المايك واحد: التعرف الصوتي ومقياس الضجيج لا يشتغلان معاً — نوقف مقياس الصوت ليعمل التعرف
       _stopNoiseMeter();
       await Future.delayed(const Duration(milliseconds: 500));
       if (!_isMonitoring || !mounted) return;
@@ -717,16 +744,21 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       } catch (_) {
         localeToUse = 'ar_SA';
       }
-      void doListen() {
+      void doListen({bool fromRestart = false}) {
         if (!_isMonitoring || !mounted) return;
-        _speechToText!.stop();
-        _lastCountedSpeechText = '';
+        _stopNoiseMeter(); // قبل أي استماع نحرر المايك من مقياس الصوت
+        if (!fromRestart) {
+          _speechToText!.stop();
+          _lastCountedSpeechText = '';
+        }
         _speechToText!.listen(
           onResult: (result) {
             if (mounted) setState(() => _lastRecognizedWords = result.recognizedWords);
             if (result.recognizedWords.isEmpty) return;
             final text = result.recognizedWords.trim();
             debugPrint('🎤 النص المعرَف: "$text" (نهائي: ${result.finalResult})');
+            debugPrint('   📋 بعد التطبيع: "${getNormalizedTextForDebug(text)}"');
+            // عد الكلمات السيئة على النتائج النهائية والجزئية لالتقاط "خرا" وغيرها حتى لو النص جاي على دفعات
             final counts = countBadWordsInText(text);
             if (counts.isNotEmpty) {
               for (final e in counts.entries) {
@@ -736,8 +768,9 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
               debugPrint('✅ كلمات سيئة مكتشفة: $counts');
             }
           },
-          listenFor: const Duration(seconds: 30),
-          pauseFor: const Duration(seconds: 8),
+          listenFor: const Duration(minutes: 5),
+          // مدة الصمت قبل إيقاف الاستماع: دقيقتان حتى لا يطفي المايك لما تسكت
+          pauseFor: const Duration(minutes: 2),
           partialResults: true,
           localeId: localeToUse,
           cancelOnError: false,
@@ -752,8 +785,18 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
         onStatus: (s) {
           if (mounted) setState(() => _speechStatus = s);
           if (s == 'done' || s == 'notListening' || s == 'doneListening') {
-            Future.delayed(const Duration(milliseconds: 300), () {
-              if (_isMonitoring && _speechListening && mounted) doListen();
+            if (!_isMonitoring || !_speechListening || !mounted) return;
+            _speechRestartAfterDoneTimer?.cancel();
+            // تأخير قصير حتى يحرر التعرف المايك ثم نشغّل مقياس الصوت لمدة ١٥ ثانية
+            Future.delayed(const Duration(milliseconds: 500), () {
+              if (!_isMonitoring || !_speechListening || !mounted) return;
+              _startNoiseMeter();
+              if (mounted) setState(() {});
+              debugPrint('🔊 مقياس الصوت (مستوى الصوت) يعمل لمدة ١٥ ثانية');
+              _speechRestartAfterDoneTimer = Timer(const Duration(seconds: 15), () {
+                _speechRestartAfterDoneTimer = null;
+                if (_isMonitoring && _speechListening && mounted) doListen(fromRestart: true);
+              });
             });
           }
         },
@@ -771,10 +814,10 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
       _speechListening = true;
       if (mounted) setState(() => _speechStatus = 'يستمع...');
       _speechRestartTimer?.cancel();
-      _speechRestartTimer = Timer.periodic(const Duration(seconds: 25), (_) {
-        if (_isMonitoring && _speechListening && mounted) doListen();
+      _speechRestartTimer = Timer.periodic(const Duration(minutes: 4), (_) {
+        if (_isMonitoring && _speechListening && mounted) doListen(fromRestart: true);
       });
-      debugPrint('بدء التعرف على الصوت — الصوت يضل فاتح (إعادة تشغيل تلقائي)');
+      debugPrint('بدء التعرف على الصوت (نافذة كلمات سيئة) — التناوب مع مقياس الصوت كل ٥٠ ثانية');
     } catch (e) {
       debugPrint('خطأ بدء التعرف على الصوت: $e');
       if (mounted) setState(() => _speechStatus = 'خطأ: $e');
@@ -784,6 +827,8 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
   void _stopSpeechRecognition() {
     _speechRestartTimer?.cancel();
     _speechRestartTimer = null;
+    _speechRestartAfterDoneTimer?.cancel();
+    _speechRestartAfterDoneTimer = null;
     _speechToText?.stop();
     _speechListening = false;
   }
@@ -815,6 +860,10 @@ class _MonitoringViewState extends State<MonitoringView> with WidgetsBindingObse
     });
 
     _monitoringTimer?.cancel();
+    _alternateToSpeechTimer?.cancel();
+    _alternateToSpeechTimer = null;
+    _alternateToNoiseTimer?.cancel();
+    _alternateToNoiseTimer = null;
     _stopNoiseMeter();
     _stopSpeechRecognition();
     _saveTimer?.cancel();

@@ -4,6 +4,9 @@ const List<String> kBadWordsList = [
   'يلعن',
   'خرا',
   'خرة',
+  'خراء',
+  'خرى',
+  'خري',
   'زق',
   'طيز',
   'كس',
@@ -34,16 +37,23 @@ const List<String> kBadWordsList = [
 
 /// يفحص النص ويُرجع خريطة: كل كلمة سيئة → عدد مرات ظهورها.
 /// كل ظهور (بما فيها الصيغ المُخفاة مثل s****) = +1 للكاونت.
+/// للتشخيص: إرجاع النص بعد التطبيع (لطباعته في الكونسول إن لزم)
+String getNormalizedTextForDebug(String text) => _normalize(text);
+
 Map<String, int> countBadWordsInText(String text) {
   if (text.isEmpty) return {};
   final Map<String, int> counts = {};
   final normalizedText = _normalize(text);
+  // مطابقة أيضاً على النص بدون مسافات لالتقاط ما يرجعه المحرك متفرقاً مثل "خ ر ا"
+  final normalizedNoSpaces = normalizedText.replaceAll(' ', '');
   for (final bad in kBadWordsList) {
     final normalizedBad = _normalize(bad);
     if (normalizedBad.isEmpty) continue;
     final pattern = RegExp(RegExp.escape(normalizedBad));
-    final matches = pattern.allMatches(normalizedText);
-    final c = matches.length;
+    final c1 = pattern.allMatches(normalizedText).length;
+    final c2 = pattern.allMatches(normalizedNoSpaces).length;
+    // نستخدم العدد الأكبر: إن رجع المحرك "خ ر ا" يطابق في normalizedNoSpaces فقط
+    final c = c1 > c2 ? c1 : c2;
     if (c > 0) counts[bad] = (counts[bad] ?? 0) + c;
   }
   return counts;
@@ -58,6 +68,7 @@ String _normalize(String s) {
   t = t.replaceAll('ى', 'ي');
   t = t.replaceAll('ئ', 'ي');
   t = t.replaceAll('ؤ', 'و');
+  t = t.replaceAll('ء', 'ا'); // همزة → ا (خراء → خراا ثم نطابق خرا)
   t = t.replaceAll(RegExp(r'\s+'), ' ');
   t = t.replaceAll(RegExp(r'[\u200B-\u200D\uFEFF]'), ''); // أحرف عرض صفر
   t = t.replaceAll('•', '*').replaceAll('·', '*').replaceAll('＊', '*'); // توحيد النجمة
